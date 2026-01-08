@@ -5,354 +5,11 @@
 #include "lwip/inet.h"
 
 #include "time_utils.h" // нужен applyTimeConfig()
+#include <pgmspace.h>
 
-static String genApPass(uint8_t len = 10) {
-  // len должен быть >= 8 (ограничение WPA2)
-  if (len < 8) len = 8;
+// ==================== Статический HTML в PROGMEM ====================
 
-  // без похожих символов (0/O, 1/l/I)
-  static const char* alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const size_t n = strlen(alphabet);
-
-  String out;
-  out.reserve(len);
-  for (uint8_t i = 0; i < len; i++) {
-    uint32_t r = esp_random();          // крипто-рандом ESP32
-    out += alphabet[r % n];
-  }
-  return out;
-}
-
-static String escJson(const String& s) {
-  String o;
-  o.reserve(s.length() + 8);
-  for (size_t i = 0; i < s.length(); i++) {
-    char c = s[i];
-    switch (c) {
-      case '\\': o += "\\\\"; break;
-      case '"':  o += "\\\""; break;
-      case '\b': o += "\\b";  break;
-      case '\f': o += "\\f";  break;
-      case '\n': o += "\\n";  break;
-      case '\r': o += "\\r";  break;
-      case '\t': o += "\\t";  break;
-      default:
-        if ((uint8_t)c < 32) { o += ' '; }
-        else o += c;
-    }
-  }
-  return o;
-}
-
-void CaptivePortal::logI(const String& s) {
-  Serial.println(s);
-  if (_logs) _logs->add(LogLevel::Info, s);
-}
-void CaptivePortal::logE(const String& s) {
-  Serial.println(s);
-  if (_logs) _logs->add(LogLevel::Error, s);
-}
-
-float CaptivePortal::toF(const String& s) {
-  String v = s;
-  v.replace(',', '.');
-  return v.toFloat();
-}
-
-static void forceApDnsToSelf(const IPAddress& apIP) {
-  esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-  if (!ap) return;
-
-  esp_netif_dns_info_t dns{};
-  dns.ip.type = IPADDR_TYPE_V4;
-  dns.ip.u_addr.ip4.addr = ipaddr_addr(apIP.toString().c_str());
-  esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
-}
-
-// -------------------- Portal begin/stop/tick --------------------
-
-bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* settings) {
-  if (_active) return true;
-
-  _logs = logs;
-  _store = store;
-  _settings = settings;
-
-  WiFi.setAutoReconnect(false);
-  WiFi.persistent(false);
-  WiFi.disconnect(true);
-  delay(200);
-
-  // Только AP (сканирования больше нет)
-  WiFi.mode(WIFI_AP);
-
-  WiFi.softAPConfig(_apIP, _apIP, IPAddress(255, 255, 255, 0));
-
- // _apSsid = "TDisplay-Setup";
-  _apPass = genApPass(8); // 8..12 норм
-
-  bool apOk = WiFi.softAP(_apSsid.c_str(), _apPass.c_str());
-  if (!apOk) {
-    logE("[AP] softAP failed");
-    return false;
-  }
-
-  delay(150);
-  forceApDnsToSelf(_apIP);
-
-  logI(String("[AP] SSID: ") + _apSsid);
-  logI(String("[AP] PASS: ") + _apPass);
-  logI(String("[AP] IP  : ") + WiFi.softAPIP().toString());
-
-  if (!_evtInstalled) {
-    _evtInstalled = true;
-
-    WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info) {
-      if (!_active) return;
-
-      if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
-        char mac[18];
-        snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 info.wifi_ap_staconnected.mac[0], info.wifi_ap_staconnected.mac[1],
-                 info.wifi_ap_staconnected.mac[2], info.wifi_ap_staconnected.mac[3],
-                 info.wifi_ap_staconnected.mac[4], info.wifi_ap_staconnected.mac[5]);
-        logI(String("[AP] STA connected: ") + mac);
-      }
-
-      if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
-        char mac[18];
-        snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 info.wifi_ap_stadisconnected.mac[0], info.wifi_ap_stadisconnected.mac[1],
-                 info.wifi_ap_stadisconnected.mac[2], info.wifi_ap_stadisconnected.mac[3],
-                 info.wifi_ap_stadisconnected.mac[4], info.wifi_ap_stadisconnected.mac[5]);
-        logI(String("[AP] STA disconnected: ") + mac);
-      }
-    });
-  }
-
-  _dns.setErrorReplyCode(DNSReplyCode::NoError);
-  _dns.start(53, "*", _apIP);
-
-  auto noCache = [this]() {
-    _srv.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-    _srv.sendHeader("Pragma", "no-cache");
-    _srv.sendHeader("Expires", "0");
-  };
-
-  auto logReq = [this]() {
-    logI(String("[HTTP] host=") + _srv.hostHeader() + " uri=" + _srv.uri());
-  };
-
-  auto sendPortal = [this, noCache, logReq]() {
-    logReq();
-    noCache();
-    _srv.send(200, "text/html; charset=utf-8", htmlPage());
-  };
-
-  auto redirectToPortal = [this, noCache, logReq]() {
-    logReq();
-    noCache();
-    _srv.sendHeader("Location", String("http://") + _apIP.toString() + "/", true);
-    _srv.send(302, "text/plain; charset=utf-8", "Redirect");
-  };
-
-  _srv.on("/", HTTP_GET, sendPortal);
-
-  _srv.on("/cfg", HTTP_GET, [this, logReq, noCache] {
-    logReq();
-    noCache();
-    handleCfg();
-  });
-
-  _srv.on("/save", HTTP_POST, [this, logReq, noCache] {
-    logReq();
-    noCache();
-    handleSave();
-  });
-
-  // --- actions ---
-  _srv.on("/exit", HTTP_POST, [this, logReq, noCache] {
-    logReq();
-    noCache();
-    _srv.send(200, "text/plain; charset=utf-8", "OK");
-    delay(150);
-    ESP.restart();
-  });
-
-  _srv.on("/reboot", HTTP_POST, [this, logReq, noCache] {
-    logReq();
-    noCache();
-    _srv.send(200, "text/plain; charset=utf-8", "OK");
-    delay(150);
-    ESP.restart();
-  });
-
-  _srv.on("/favicon.ico", HTTP_GET, [this, logReq, noCache] {
-    logReq();
-    noCache();
-    _srv.send(204);
-  });
-
-  // Captive probe endpoints
-  _srv.on("/success.txt", HTTP_GET, redirectToPortal);
-  _srv.on("/success.txt", HTTP_HEAD, redirectToPortal);
-
-  _srv.on("/canonical.html", HTTP_GET, redirectToPortal);
-  _srv.on("/canonical.html", HTTP_HEAD, redirectToPortal);
-
-  _srv.on("/generate_204", HTTP_GET, redirectToPortal);
-  _srv.on("/gen_204", HTTP_GET, redirectToPortal);
-  _srv.on("/generate_204", HTTP_HEAD, redirectToPortal);
-
-  _srv.on("/hotspot-detect.html", HTTP_GET, sendPortal);
-  _srv.on("/hotspot-detect.html", HTTP_HEAD, sendPortal);
-
-  _srv.on("/library/test/success.html", HTTP_GET, sendPortal);
-  _srv.on("/library/test/success.html", HTTP_HEAD, sendPortal);
-
-  // Windows
-  _srv.on("/connecttest.txt", HTTP_GET, [this, logReq, noCache] {
-    logReq();
-    noCache();
-    _srv.send(200, "text/plain; charset=utf-8", "captive");
-  });
-  _srv.on("/ncsi.txt", HTTP_GET, redirectToPortal);
-  _srv.on("/fwlink", HTTP_GET, redirectToPortal);
-  _srv.on("/redirect", HTTP_GET, redirectToPortal);
-
-  _srv.onNotFound([this, noCache, logReq]() {
-    logReq();
-    noCache();
-    _srv.sendHeader("Location", String("http://") + _apIP.toString() + "/", true);
-    _srv.send(302, "text/plain; charset=utf-8", "Redirect");
-  });
-
-  _srv.begin();
-  _active = true;
-
-  logI("[AP] Captive portal started");
-  return true;
-}
-
-void CaptivePortal::stop() {
-  if (!_active) return;
-
-  _srv.stop();
-  _dns.stop();
-
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_STA);
-
-  _active = false;
-  logI("[AP] Captive portal stopped");
-}
-
-void CaptivePortal::tick() {
-  if (!_active) return;
-  _dns.processNextRequest();
-  _srv.handleClient();
-}
-
-// -------------------- cfg/save --------------------
-
-void CaptivePortal::handleCfg() {
-  if (!_settings) {
-    _srv.send(500, "text/plain; charset=utf-8", "no settings");
-    return;
-  }
-
-  String j = "{";
-  j += "\"wifi\":[";
-  for (int i = 0; i < MAX_WIFI; i++) {
-    if (i) j += ",";
-    j += "{";
-    j += "\"ssid\":\"" + escJson(_settings->wifi[i].ssid) + "\",";
-    j += "\"pass\":\"" + escJson(_settings->wifi[i].pass) + "\"";
-    j += "}";
-  }
-  j += "],";
-
-    j += "\"host\":\"" + escJson(String(_settings->hostSite)) + "\",";
-
-  j += "\"tzMin\":" + String(_settings->tzMinutes) + ",";
-  j += "\"dst\":" + String(_settings->dstEnable ? "true" : "false") + ",";
-  j += "\"bounds\":[" +
-       String(_settings->sgvBounds[0], 1) + "," +
-       String(_settings->sgvBounds[1], 1) + "," +
-       String(_settings->sgvBounds[2], 1) + "," +
-       String(_settings->sgvBounds[3], 1) + "]";
-  j += "}";
-
-  _srv.send(200, "application/json; charset=utf-8", j);
-}
-
-void CaptivePortal::handleSave() {
-  if (!_settings || !_store) {
-    logE("[HTTP] /save: no store/settings");
-    _srv.send(500, "text/plain; charset=utf-8", "no store/settings");
-    return;
-  }
-
-  AppSettings s = *_settings;
-
-  // Wi-Fi slots (порядок задаёт фронт: ssid0..ssid4)
-  for (int i = 0; i < MAX_WIFI; i++) {
-    String ss = _srv.arg("ssid" + String(i));
-    String pw = _srv.arg("pass" + String(i));
-    ss.trim(); pw.trim();
-
-    if (ss.length() == 0) {
-      s.wifi[i].ssid[0] = 0;
-      s.wifi[i].pass[0] = 0;
-    } else {
-      strlcpy(s.wifi[i].ssid, ss.c_str(), sizeof(s.wifi[i].ssid));
-      strlcpy(s.wifi[i].pass, pw.c_str(), sizeof(s.wifi[i].pass));
-    }
-  }
-
-  //  host site
-  String host = _srv.arg("host");
-  host.trim();
-  strlcpy(s.hostSite, host.c_str(), sizeof(s.hostSite));
-
-  // часовой пояс
-  String tzStr = _srv.arg("tzOff");
-  if (tzStr.length() == 0) tzStr = _srv.arg("tzMin");
-
-  int tz = tzStr.toInt();
-  if (tz < -14 * 60) tz = -14 * 60;
-  if (tz > +14 * 60) tz = +14 * 60;
-
-  s.tzMinutes = (int16_t)tz;
-  s.dstEnable = (_srv.arg("dst") == "1");
-
-  // bounds
-  for (int i = 0; i < 4; i++) {
-    s.sgvBounds[i] = toF(_srv.arg("b" + String(i)));
-  }
-  if (!s.isValidBounds()) {
-    _srv.send(400, "text/plain; charset=utf-8", "bounds must be strictly increasing");
-    return;
-  }
-
-  if (_store->save(s)) {
-    *_settings = s;
-
-    // Apply TZ/DST instantly for BOTH your legacy time_utils and system localtime()
-    applyTimeConfig(s.tzMinutes, s.dstEnable);
-
-    _srv.send(200, "text/plain; charset=utf-8", "OK");
-    return;
-  }
-
-  _srv.send(500, "text/plain; charset=utf-8", "save failed");
-}
-
-// -------------------- HTML --------------------
-
-String CaptivePortal::htmlPage() const {
-  String h;
-  h += R"HTML(<!doctype html>
+static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -529,18 +186,22 @@ String CaptivePortal::htmlPage() const {
   <div class="title">Настройка</div>
 
   <div class="card">
-   <div style="font-size:16px; font-weight:650;">Nightscout</div>
-    <div class="row" style="margin-top:10px;">
-      <label>HOST</label>
-      <div>
-        <input id="host" placeholder="например: j12345678.nightscout-jino.ru" autocomplete="off">
-        <div class="muted" style="margin-top:6px;">
-          Можно указывать с https:// или без — устройство само подставит схему.
-        </div>
+    <div style="font-size:16px; font-weight:650; margin-bottom:6px;">
+      Адрес сервера Nightscout
+    </div>
+
+    <div>
+      <input
+        id="host"
+        placeholder="например: j12345678.nightscout-jino.ru или 10.0.0.5:1337"
+        autocomplete="off"
+        style="width:100%;"
+      >
+      <div class="muted" style="margin-top:6px;">
+        Указывайте только домен (и порт при необходимости), без http:// и без /api/...
       </div>
     </div>
   </div>
-
 
   <div class="card">
     <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:10px;">
@@ -556,7 +217,7 @@ String CaptivePortal::htmlPage() const {
   <div class="card">
     <div style="font-size:16px; font-weight:650;">Часовой пояс</div>
 
-    <div class="row2" style="margin-top:10px;">
+    <div class="row2" style="margin-top:10px%;">
       <div>
         <div class="muted" style="margin-bottom:6px;">Часовой пояс</div>
         <select id="tzSel"></select>
@@ -623,7 +284,21 @@ String CaptivePortal::htmlPage() const {
 
   const hostInp = document.getElementById('host');
 
-  let slots = Array.from({length:5}, (_,i)=>({ssid:'', pass:'', id:i}));
+  // slots: {ssid, pass, hasPass, passDirty, id}
+  let slots = Array.from({length:5}, (_,i)=>({ssid:'', pass:'', hasPass:false, passDirty:false, id:i}));
+
+  // ----- HOST sanitize (front-end) -----
+  function sanitizeHost(s){
+    s = String(s || '').trim();
+    s = s.replace(/^https?:\/\//i, '');
+    const slash = s.indexOf('/');
+    if (slash >= 0) s = s.slice(0, slash);
+    s = s.replace(/\/+$/,'');
+    s = s.replace(/\s+/g,'');
+    return s;
+  }
+  hostInp.addEventListener('blur', ()=>{ hostInp.value = sanitizeHost(hostInp.value); });
+  hostInp.addEventListener('paste', ()=>{ setTimeout(()=>{ hostInp.value = sanitizeHost(hostInp.value); }, 0); });
 
   // ----- SGV -----
   function normalizeFloat1(el) {
@@ -749,10 +424,18 @@ String CaptivePortal::htmlPage() const {
 
   function renderSlot(slotIndex){
     const slot = slots[slotIndex];
+    const MASK = "••••••";
 
     const el = document.createElement('div');
     el.className = 'slot';
     el.draggable = true;
+
+    const passPlaceholder = "пароль (может быть пустым)";
+
+    const passValue =
+      (slot.hasPass && !slot.passDirty)
+        ? MASK
+        : escapeHtml(slot.pass);
 
     el.innerHTML = `
       <div class="slotTop">
@@ -776,7 +459,9 @@ String CaptivePortal::htmlPage() const {
       <div class="row">
         <label>Пароль</label>
         <div class="passWrap">
-          <input class="passInp" type="password" placeholder="пароль (может быть пустым)" value="${escapeHtml(slot.pass)}">
+          <input class="passInp" type="password"
+                 placeholder="${passPlaceholder}"
+                 value="${passValue}">
           <button class="eye" type="button" title="Показать/скрыть">👁</button>
         </div>
       </div>
@@ -801,9 +486,20 @@ String CaptivePortal::htmlPage() const {
     const passInp = el.querySelector('.passInp');
     const eyeBtn = el.querySelector('.eye');
 
-    ssidInp.addEventListener('input', ()=>{ slots[slotIndex].ssid = ssidInp.value; });
-    passInp.addEventListener('input', ()=>{ slots[slotIndex].pass = passInp.value; });
-    eyeBtn.addEventListener('click', ()=>{ passInp.type = (passInp.type === 'password') ? 'text' : 'password'; });
+    ssidInp.addEventListener('input', ()=>{
+      slots[slotIndex].ssid = ssidInp.value;
+    });
+
+    passInp.addEventListener('input', ()=>{
+      const slot = slots[slotIndex];
+      slot.passDirty = true;
+      slot.pass = passInp.value;
+      slot.hasPass = slot.pass.length > 0;
+    });
+
+    eyeBtn.addEventListener('click', ()=>{
+      passInp.type = (passInp.type === 'password') ? 'text' : 'password';
+    });
 
     // drag & drop reorder
     el.addEventListener('dragstart', (e)=>{
@@ -837,11 +533,17 @@ String CaptivePortal::htmlPage() const {
   async function loadCfg(){
     const r = await fetch('/cfg', {cache:'no-store'});
     const j = await r.json();
-    
-    hostInp.value = (j.host || "");
 
-    slots = (j.wifi || []).slice(0,5).map((w,idx)=>({ ssid:w.ssid||"", pass:w.pass||"", id:idx }));
-    while(slots.length < 5) slots.push({ssid:'', pass:'', id:slots.length});
+    hostInp.value = sanitizeHost(j.host || "");
+
+    slots = (j.wifi || []).slice(0,5).map((w,idx)=>({
+      ssid: w.ssid || "",
+      pass: "",
+      hasPass: !!w.hasPass,
+      passDirty: false,
+      id: idx
+    }));
+    while(slots.length < 5) slots.push({ssid:'', pass:'', hasPass:false, passDirty:false, id:slots.length});
     renderAllSlots();
 
     dst.value = (j.dst ? '1':'0');
@@ -881,8 +583,17 @@ String CaptivePortal::htmlPage() const {
 
     const form = new URLSearchParams();
     for(let i=0;i<5;i++){
-      form.set('ssid'+i, (slots[i]?.ssid || '').trim());
-      form.set('pass'+i, (slots[i]?.pass || '').trim());
+      const slot = slots[i] || {ssid:'', pass:'', hasPass:false, passDirty:false};
+      form.set('ssid'+i, (slot.ssid || '').trim());
+
+      // passChangedN: 1 — менять (берём из passN), 0 — оставить как есть
+      if (slot.passDirty) {
+        form.set('passChanged'+i, '1');
+        form.set('pass'+i, (slot.pass || '').trim());
+      } else {
+        form.set('passChanged'+i, '0');
+        form.set('pass'+i, ''); // игнорируется на бэке
+      }
     }
 
     let tzOffMin = 0;
@@ -896,7 +607,10 @@ String CaptivePortal::htmlPage() const {
     form.set('dst', dst.value === '1' ? '1' : '0');
     nums.forEach((v,i)=>form.set('b'+i, v.toFixed(1)));
 
-    form.set('host', (hostInp.value || '').trim());
+    // sanitize host before sending
+    const hostClean = sanitizeHost(hostInp.value || '');
+    hostInp.value = hostClean;
+    form.set('host', hostClean);
 
     const r = await fetch('/save', {
       method:'POST',
@@ -956,5 +670,382 @@ String CaptivePortal::htmlPage() const {
 </script>
 </body>
 </html>)HTML";
-  return h;
+
+
+// ==================== Локальные утилиты ====================
+
+static String genApPass(uint8_t len = 10) {
+  // len должен быть >= 8 (ограничение WPA2)
+  if (len < 8) len = 8;
+
+  // без похожих символов (0/O, 1/l/I)
+  static const char* alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const size_t n = strlen(alphabet);
+
+  String out;
+  out.reserve(len);
+  for (uint8_t i = 0; i < len; i++) {
+    uint32_t r = esp_random();          // крипто-рандом ESP32
+    out += alphabet[r % n];
+  }
+  return out;
+}
+
+static String escJson(const String& s) {
+  String o;
+  o.reserve(s.length() + 8);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    switch (c) {
+      case '\\': o += "\\\\"; break;
+      case '"':  o += "\\\""; break;
+      case '\b': o += "\\b";  break;
+      case '\f': o += "\\f";  break;
+      case '\n': o += "\\n";  break;
+      case '\r': o += "\\r";  break;
+      case '\t': o += "\\t";  break;
+      default:
+        if ((uint8_t)c < 32) { o += ' '; }
+        else o += c;
+    }
+  }
+  return o;
+}
+
+void CaptivePortal::logI(const String& s) {
+  Serial.println(s);
+  if (_logs) _logs->add(LogLevel::Info, s);
+}
+void CaptivePortal::logE(const String& s) {
+  Serial.println(s);
+  if (_logs) _logs->add(LogLevel::Error, s);
+}
+
+float CaptivePortal::toF(const String& s) {
+  String v = s;
+  v.replace(',', '.');
+  return v.toFloat();
+}
+
+// --- IMPORTANT: sanitize Nightscout HOST from user input ---
+static void sanitizeHostInPlace(String& h) {
+  h.trim();
+
+  // если пользователь вставил http/https — обрежем
+  if (h.startsWith("http://"))  h.remove(0, 7);
+  if (h.startsWith("https://")) h.remove(0, 8);
+
+  // если вставлен полный URL — отрезать путь/квери
+  int slash = h.indexOf('/');
+  if (slash >= 0) h.remove(slash);
+
+  // remove trailing slashes just in case
+  while (h.endsWith("/")) h.remove(h.length() - 1);
+
+  // remove spaces inside
+  h.replace(" ", "");
+}
+
+static void forceApDnsToSelf(const IPAddress& apIP) {
+  esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+  if (!ap) return;
+
+  esp_netif_dns_info_t dns{};
+  dns.ip.type = IPADDR_TYPE_V4;
+  dns.ip.u_addr.ip4.addr = ipaddr_addr(apIP.toString().c_str());
+  esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
+}
+
+// ==================== Portal begin/stop/tick ====================
+
+bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* settings) {
+  if (_active) return true;
+
+  _logs = logs;
+  _store = store;
+  _settings = settings;
+
+  WiFi.setAutoReconnect(false);
+  WiFi.persistent(false);
+  WiFi.disconnect(true);
+  delay(200);
+
+  // Только AP (сканирования больше нет)
+  WiFi.mode(WIFI_AP);
+
+  WiFi.softAPConfig(_apIP, _apIP, IPAddress(255, 255, 255, 0));
+
+  // _apSsid = "TDisplay-Setup";
+  _apPass = genApPass(8); // 8..12 норм
+
+  bool apOk = WiFi.softAP(_apSsid.c_str(), _apPass.c_str());
+  if (!apOk) {
+    logE("[AP] softAP failed");
+    return false;
+  }
+
+  delay(150);
+  forceApDnsToSelf(_apIP);
+
+  logI(String("[AP] SSID: ") + _apSsid);
+  logI(String("[AP] PASS: ") + _apPass);
+  logI(String("[AP] IP  : ") + WiFi.softAPIP().toString());
+
+  if (!_evtInstalled) {
+    _evtInstalled = true;
+
+    WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info) {
+      if (!_active) return;
+
+      if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
+        char mac[18];
+        snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 info.wifi_ap_staconnected.mac[0], info.wifi_ap_staconnected.mac[1],
+                 info.wifi_ap_staconnected.mac[2], info.wifi_ap_staconnected.mac[3],
+                 info.wifi_ap_staconnected.mac[4], info.wifi_ap_staconnected.mac[5]);
+        logI(String("[AP] STA connected: ") + mac);
+      }
+
+      if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
+        char mac[18];
+        snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 info.wifi_ap_stadisconnected.mac[0], info.wifi_ap_stadisconnected.mac[1],
+                 info.wifi_ap_stadisconnected.mac[2], info.wifi_ap_stadisconnected.mac[3],
+                 info.wifi_ap_stadisconnected.mac[4], info.wifi_ap_stadisconnected.mac[5]);
+        logI(String("[AP] STA disconnected: ") + mac);
+      }
+    });
+  }
+
+  _dns.setErrorReplyCode(DNSReplyCode::NoError);
+  _dns.start(53, "*", _apIP);
+
+  auto noCache = [this]() {
+    _srv.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    _srv.sendHeader("Pragma", "no-cache");
+    _srv.sendHeader("Expires", "0");
+  };
+
+  auto logReq = [this]() {
+    logI(String("[HTTP] host=") + _srv.hostHeader() + " uri=" + _srv.uri());
+  };
+
+  auto sendPortal = [this, noCache, logReq]() {
+    logReq();
+    noCache();
+    // HTML сразу из PROGMEM
+    _srv.send_P(200, "text/html; charset=utf-8", INDEX_HTML);
+  };
+
+  auto redirectToPortal = [this, noCache, logReq]() {
+    logReq();
+    noCache();
+    _srv.sendHeader("Location", String("http://") + _apIP.toString() + "/", true);
+    _srv.send(302, "text/plain; charset=utf-8", "Redirect");
+  };
+
+  _srv.on("/", HTTP_GET, sendPortal);
+
+  _srv.on("/cfg", HTTP_GET, [this, logReq, noCache] {
+    logReq();
+    noCache();
+    handleCfg();
+  });
+
+  _srv.on("/save", HTTP_POST, [this, logReq, noCache] {
+    logReq();
+    noCache();
+    handleSave();
+  });
+
+  // --- actions ---
+  _srv.on("/exit", HTTP_POST, [this, logReq, noCache] {
+    logReq();
+    noCache();
+    _srv.send(200, "text/plain; charset=utf-8", "OK");
+    delay(150);
+    ESP.restart();
+  });
+
+  _srv.on("/reboot", HTTP_POST, [this, logReq, noCache] {
+    logReq();
+    noCache();
+    _srv.send(200, "text/plain; charset=utf-8", "OK");
+    delay(150);
+    ESP.restart();
+  });
+
+  _srv.on("/favicon.ico", HTTP_GET, [this, logReq, noCache] {
+    logReq();
+    noCache();
+    _srv.send(204);
+  });
+
+  // Captive probe endpoints
+  _srv.on("/success.txt", HTTP_GET, redirectToPortal);
+  _srv.on("/success.txt", HTTP_HEAD, redirectToPortal);
+
+  _srv.on("/canonical.html", HTTP_GET, redirectToPortal);
+  _srv.on("/canonical.html", HTTP_HEAD, redirectToPortal);
+
+  _srv.on("/generate_204", HTTP_GET, redirectToPortal);
+  _srv.on("/gen_204", HTTP_GET, redirectToPortal);
+  _srv.on("/generate_204", HTTP_HEAD, redirectToPortal);
+
+  _srv.on("/hotspot-detect.html", HTTP_GET, sendPortal);
+  _srv.on("/hotspot-detect.html", HTTP_HEAD, sendPortal);
+
+  _srv.on("/library/test/success.html", HTTP_GET, sendPortal);
+  _srv.on("/library/test/success.html", HTTP_HEAD, sendPortal);
+
+  // Windows
+  _srv.on("/connecttest.txt", HTTP_GET, [this, logReq, noCache] {
+    logReq();
+    noCache();
+    _srv.send(200, "text/plain; charset=utf-8", "captive");
+  });
+  _srv.on("/ncsi.txt", HTTP_GET, redirectToPortal);
+  _srv.on("/fwlink", HTTP_GET, redirectToPortal);
+  _srv.on("/redirect", HTTP_GET, redirectToPortal);
+
+  _srv.onNotFound([this, noCache, logReq]() {
+    logReq();
+    noCache();
+    _srv.sendHeader("Location", String("http://") + _apIP.toString() + "/", true);
+    _srv.send(302, "text/plain; charset=utf-8", "Redirect");
+  });
+
+  _srv.begin();
+  _active = true;
+
+  logI("[AP] Captive portal started");
+  return true;
+}
+
+void CaptivePortal::stop() {
+  if (!_active) return;
+
+  _srv.stop();
+  _dns.stop();
+
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+
+  _active = false;
+  logI("[AP] Captive portal stopped");
+}
+
+void CaptivePortal::tick() {
+  if (!_active) return;
+  _dns.processNextRequest();
+  _srv.handleClient();
+}
+
+// ==================== cfg/save ====================
+
+void CaptivePortal::handleCfg() {
+  if (!_settings) {
+    _srv.send(500, "text/plain; charset=utf-8", "no settings");
+    return;
+  }
+
+  String j = "{";
+  j += "\"wifi\":[";
+  for (int i = 0; i < MAX_WIFI; i++) {
+    if (i) j += ",";
+    j += "{";
+    j += "\"ssid\":\"" + escJson(_settings->wifi[i].ssid) + "\",";
+    // ВАЖНО: пароль не отдаём, только флаг hasPass
+    bool hasPass = (_settings->wifi[i].pass[0] != 0);
+    j += "\"hasPass\":" + String(hasPass ? "true" : "false") + ",";
+    j += "\"pass\":\"\"";
+    j += "}";
+  }
+  j += "],";
+
+  j += "\"host\":\"" + escJson(String(_settings->hostSite)) + "\",";
+
+  j += "\"tzMin\":" + String(_settings->tzMinutes) + ",";
+  j += "\"dst\":" + String(_settings->dstEnable ? "true" : "false") + ",";
+  j += "\"bounds\":[" +
+       String(_settings->sgvBounds[0], 1) + "," +
+       String(_settings->sgvBounds[1], 1) + "," +
+       String(_settings->sgvBounds[2], 1) + "," +
+       String(_settings->sgvBounds[3], 1) + "]";
+  j += "}";
+
+  _srv.send(200, "application/json; charset=utf-8", j);
+}
+
+void CaptivePortal::handleSave() {
+  if (!_settings || !_store) {
+    logE("[HTTP] /save: no store/settings");
+    _srv.send(500, "text/plain; charset=utf-8", "no store/settings");
+    return;
+  }
+
+  AppSettings s = *_settings;
+
+  // Wi-Fi slots (порядок задаёт фронт: ssid0..ssid4, pass0..pass4, passChanged0..4)
+  for (int i = 0; i < MAX_WIFI; i++) {
+    String ss = _srv.arg("ssid" + String(i));
+    String pw = _srv.arg("pass" + String(i));
+    String ch = _srv.arg("passChanged" + String(i)); // "1" если поле меняли
+
+    ss.trim();
+    pw.trim();
+    ch.trim();
+
+    if (ss.length() == 0) {
+      // пустой SSID — слот очищаем полностью, в т.ч. пароль
+      s.wifi[i].ssid[0] = 0;
+      s.wifi[i].pass[0] = 0;
+    } else {
+      strlcpy(s.wifi[i].ssid, ss.c_str(), sizeof(s.wifi[i].ssid));
+
+      if (ch == "1") {
+        // пароль реально меняли: можно установить новый (включая пустой, чтобы очистить)
+        strlcpy(s.wifi[i].pass, pw.c_str(), sizeof(s.wifi[i].pass));
+      } else {
+        // пароль не трогали — оставляем как был (_settings уже скопирован в s)
+      }
+    }
+  }
+
+  // host site (sanitize! store only host[:port] without scheme/path)
+  String host = _srv.arg("host");
+  sanitizeHostInPlace(host);
+  strlcpy(s.hostSite, host.c_str(), sizeof(s.hostSite));
+
+  // часовой пояс
+  String tzStr = _srv.arg("tzOff");
+  if (tzStr.length() == 0) tzStr = _srv.arg("tzMin");
+
+  int tz = tzStr.toInt();
+  if (tz < -14 * 60) tz = -14 * 60;
+  if (tz > +14 * 60) tz = +14 * 60;
+
+  s.tzMinutes = (int16_t)tz;
+  s.dstEnable = (_srv.arg("dst") == "1");
+
+  // bounds
+  for (int i = 0; i < 4; i++) {
+    s.sgvBounds[i] = toF(_srv.arg("b" + String(i)));
+  }
+  if (!s.isValidBounds()) {
+    _srv.send(400, "text/plain; charset=utf-8", "bounds must be strictly increasing");
+    return;
+  }
+
+  if (_store->save(s)) {
+    *_settings = s;
+
+    // Apply TZ/DST instantly for BOTH your legacy time_utils and system localtime()
+    applyTimeConfig(s.tzMinutes, s.dstEnable);
+
+    _srv.send(200, "text/plain; charset=utf-8", "OK");
+    return;
+  }
+
+  _srv.send(500, "text/plain; charset=utf-8", "save failed");
 }

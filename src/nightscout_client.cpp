@@ -1,5 +1,5 @@
 #include "nightscout_client.h"
-
+#include "sgv_zone.h"
 // -------------------- Public API --------------------
 
 void NightscoutClient::begin(const NSConfig& cfg) {
@@ -9,6 +9,18 @@ void NightscoutClient::begin(const NSConfig& cfg) {
 void NightscoutClient::requestUpdate() {
   _wantUpdate = true;
 }
+
+
+static inline void updateZoneCache(NightscoutData& ns) {
+  if (ns.okEntries && !isnan(ns.sgv_mmol)) {
+    ns.zoneColor = colorBySgvBounds(ns.sgv_mmol);
+    ns.zoneValid = true;
+  } else {
+    ns.zoneColor = TFT_DARKGREY;
+    ns.zoneValid = false;
+  }
+}
+
 
 // -------------------- Helpers --------------------
 
@@ -233,6 +245,9 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
       if (r.kind == ReqKind::Entries) {
         _stage.httpEntries = code;
         _stage.okEntries = (ok && !doc.isNull() && doc.size() > 0) ? parseEntries(r.body, _stage, doc) : false;
+        
+          updateZoneCache(_stage);
+
         _stageHasEntries = _stage.okEntries;
         _entriesDone = true;
       }

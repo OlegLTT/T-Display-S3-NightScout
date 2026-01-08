@@ -12,24 +12,11 @@
 #include "captive_portal.h"
 #include <QRCode.h>   // ricmoo/QRCode
 #include "settings.h"
+#include "sgv_zone.h"
 
 
 #define RGB565(r, g, b) (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3))
 
-static uint16_t colorBySgvBounds(float sgv) {
-  const float* b = appCfg.sgvBounds;
-
-  // red:  sgv <= b0  OR sgv >= b3
-  if (sgv <= b[0] || sgv >= b[3]) return TFT_RED;
-
-  // yellow: (b0 < sgv <= b1) OR (b2 <= sgv < b3)
-  if ((sgv > b[0] && sgv <= b[1]) || (sgv >= b[2] && sgv < b[3])) return TFT_YELLOW;
-
-  // green: b1 < sgv < b2
-  if (sgv > b[1] && sgv < b[2]) return TFT_GREEN;
-
-  return TFT_YELLOW;
-}
 
 static void drawArrow(int x, int y, int angle, int lenght, int width, int tip, int dx, int wl, int w0, TFT_eSprite& sprite, uint16_t color)
 {
@@ -73,96 +60,139 @@ static void drawArrow(int x, int y, int angle, int lenght, int width, int tip, i
 
 void drawMainScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
   tm tml;
-  bool okTime = getLocalTime(&tml, 50); // 50ms таймаут
+  bool okTime = getLocalTime(&tml, 50);
 
   const bool okE = ns.okEntries;
   const bool okP = ns.okProps;
 
-  String sgv = (okE && !isnan(ns.sgv_mmol))   ? String(ns.sgv_mmol, 1)   : "--";
+  // --- format buffers (NO String allocations) ---
+  char timeBuf[6]   = "--:--";
+  char sgvBuf[12]   = "--";
+  char dltBuf[12]   = "--";
+  char iobBuf[16]   = "--";
+  char cobBuf[16]   = "--";
+  char ageBuf[12]   = "--";
 
-  String dir = okE ? String(ns.dir) : "--";
+  if (okTime) {
+    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", tml.tm_hour, tml.tm_min);
+  }
 
-  String dlt = (okP && !isnan(ns.delta_mmol))? ns.delta_mmol>=0?"+"+String(ns.delta_mmol, 1):String(ns.delta_mmol, 1) : "--";
-  String iob = (okP && !isnan(ns.iob)) ? String(ns.iob, 2) : "--";
-  String cob = (okP && !isnan(ns.cob)) ? String(ns.cob, 1) : "--";
+  if (okE && !isnan(ns.sgv_mmol)) {
+    snprintf(sgvBuf, sizeof(sgvBuf), "%.1f", ns.sgv_mmol);
+  }
+
+  if (okP && !isnan(ns.delta_mmol)) {
+    snprintf(dltBuf, sizeof(dltBuf), "%+.1f", ns.delta_mmol);
+  }
+
+  if (okP && !isnan(ns.iob)) {
+    snprintf(iobBuf, sizeof(iobBuf), "%.2f", ns.iob);
+  }
+
+  if (okP && !isnan(ns.cob)) {
+    snprintf(cobBuf, sizeof(cobBuf), "%.1f", ns.cob);
+  }
 
   int ageMin = 0;
   if (okE && ns.sensTime > 0) {
-    time_t tnow = time(nullptr); //now();
-    if (tnow > ns.sensTime) ageMin = (tnow - ns.sensTime) / 60;
+    time_t tnow = time(nullptr);
+    if (tnow > ns.sensTime) ageMin = (int)((tnow - ns.sensTime) / 60);
   }
-  String ageStr = okE ? String(ageMin) : "--";
+  if (okE) snprintf(ageBuf, sizeof(ageBuf), "%d", ageMin);
 
-  uint16_t bg_color = RGB565(40, 40, 40);
+
+  // --- draw ---
+  const uint16_t bg_color = RGB565(40, 40, 40);
   sprite.fillSprite(bg_color);
 
-  // Время HH:MM
-  char buf[6] = "--:--";
-  if (okTime) {
-    snprintf(buf, sizeof(buf), "%02d:%02d", tml.tm_hour, tml.tm_min);
-  }
-
+  // Time HH:MM (top)
   sprite.setTextDatum(TC_DATUM);
   sprite.setTextColor(TFT_DARKGREY, bg_color);
   sprite.loadFont(comfortaa_bold_18);
-  sprite.drawString(buf, 160, 3);
+  sprite.drawString(timeBuf, 160, 3);
 
-  // IOB/COB
+  // IOB / COB bottom
   sprite.setTextDatum(BL_DATUM);
   sprite.setTextColor(TFT_LIGHTGREY, bg_color);
-  sprite.drawString("I: " + iob, 5, 170);
-  sprite.drawString("C: " + cob, 120, 170);
+
+  char tmp[24];
+  snprintf(tmp, sizeof(tmp), "I: %s", iobBuf);
+  sprite.drawString(tmp, 5, 170);
+
+  snprintf(tmp, sizeof(tmp), "C: %s", cobBuf);
+  sprite.drawString(tmp, 120, 170);
 
   // Age
   sprite.setTextDatum(TR_DATUM);
   sprite.setTextColor(okE ? TFT_DARKGREEN : TFT_DARKGREY, bg_color);
-  sprite.drawString(ageStr + " мин", 315, 3);
 
-    // Батарея помпы
+  char ageLine[20];
+  snprintf(ageLine, sizeof(ageLine), "%s мин", ageBuf);
+  sprite.drawString(ageLine, 315, 3);
+
+  // Pump battery (use tmp buffer too)
   sprite.setTextDatum(TC_DATUM);
   sprite.drawRect(5, 2, 42, 18, TFT_DARKGREY);
   sprite.drawRect(2, 6, 3, 10, TFT_DARKGREY);
+
   if (ns.okDevStatus && ns.pumpBatValid) {
-     sprite.drawString(String(ns.pumpBatPct) + "%", 48-42/2, 4);
+    snprintf(tmp, sizeof(tmp), "%d%%", ns.pumpBatPct);
+    sprite.drawString(tmp, 48 - 42 / 2, 4);
   }
   sprite.unloadFont();
 
-  // sgv крупно
+  // SGV big
+  const uint16_t zoneCol = ns.zoneColor;
+
+  // sgv big
   sprite.setTextDatum(MC_DATUM);
   sprite.loadFont(roninset2_180);
-  uint16_t sgvCol = TFT_DARKGREY;
-  if (okE && !isnan(ns.sgv_mmol)) {
-    sgvCol = colorBySgvBounds(ns.sgv_mmol);
-  }
-  sprite.setTextColor(sgvCol, bg_color);
-  sprite.drawString(sgv, 120, 100);
+
+  sprite.setTextColor(ns.zoneValid ? zoneCol : TFT_DARKGREY, bg_color);
+  sprite.drawString(sgvBuf, 120, 100);
   sprite.unloadFont();
 
-  // Стрелка тренда 
-  int x0 = 320 - 42;
-  int y0 = 170 - 42;
+  // sprite.setTextDatum(MC_DATUM);
+  // sprite.loadFont(roninset2_180);
+
+  // uint16_t sgvCol = TFT_DARKGREY;
+  // if (okE && !isnan(ns.sgv_mmol)) {
+  //   sgvCol = colorBySgvBounds(ns.sgv_mmol);
+  // }
+  // sprite.setTextColor(sgvCol, bg_color);
+  // sprite.drawString(sgvBuf, 120, 100);
+  // sprite.unloadFont();
+
+  // Trend arrow (NO String dir)
+  const int x0 = 320 - 42;
+  const int y0 = 170 - 42;
+
   if (okE) {
     int a = 0;
     int dx = 0;
-    if (dir == "Flat")               a = 90;
-    else if (dir == "FortyFiveUp")   a = 45;
-    else if (dir == "FortyFiveDown") a = 135;
-    else if (dir == "SingleUp")      a = 0;
-    else if (dir == "SingleDown")    a = 180;
-    else if (dir == "DoubleUp") {    a = 0;   dx = 24; } 
-    else if (dir == "DoubleDown") {  a = 180; dx = 24; }
+
+    const char* dir = ns.dir; // char[32]
+    if      (!strcmp(dir, "Flat"))         a = 90;
+    else if (!strcmp(dir, "FortyFiveUp"))  a = 45;
+    else if (!strcmp(dir, "FortyFiveDown"))a = 135;
+    else if (!strcmp(dir, "SingleUp"))     a = 0;
+    else if (!strcmp(dir, "SingleDown"))   a = 180;
+    else if (!strcmp(dir, "DoubleUp"))   { a = 0;   dx = 24; }
+    else if (!strcmp(dir, "DoubleDown")) { a = 180; dx = 24; }
+
     drawArrow(x0, y0, a, 60, 16, 15, dx, 4, 2, sprite, TFT_SKYBLUE);
   }
+
   // Delta
   sprite.setTextDatum(BC_DATUM);
   sprite.loadFont(volkswagen_medium_36);
   sprite.setTextColor(okP ? TFT_SKYBLUE : TFT_DARKGREY, bg_color);
-  sprite.drawString(dlt, x0, y0 - 50);
-
+  sprite.drawString(dltBuf, x0, y0 - 50);
   sprite.unloadFont();
 
   sprite.pushSprite(0, 0);
 }
+
 
 
 
@@ -176,48 +206,51 @@ void drawClockScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
   const bool okE = ns.okEntries;
   const bool okP = ns.okProps;
 
-  String sgv = (okE && !isnan(ns.sgv_mmol))   ? String(ns.sgv_mmol, 1)   : "--";
-  String dir = okE ? String(ns.dir) : "--";
-  String dlt = (okP && !isnan(ns.delta_mmol))? ns.delta_mmol>=0?"+"+String(ns.delta_mmol, 1):String(ns.delta_mmol, 1) : "--";
-  // String iob = (okP && !isnan(ns.iob)) ? String(ns.iob, 2) : "--";
-  // String cob = (okP && !isnan(ns.cob)) ? String(ns.cob, 1) : "--";
+  // --- format buffers ---
+  char sgvBuf[12] = "--";
+  char dltBuf[12] = "--";
+  char ageBuf[12] = "--";
+
+  if (okE && !isnan(ns.sgv_mmol)) {
+    snprintf(sgvBuf, sizeof(sgvBuf), "%.1f", ns.sgv_mmol);
+  }
+
+  if (okP && !isnan(ns.delta_mmol)) {
+    snprintf(dltBuf, sizeof(dltBuf), "%+.1f", ns.delta_mmol);
+  }
 
   int ageMin = 0;
   if (okE && ns.sensTime > 0) {
-    time_t tnow = time(nullptr); //now();
-    if (tnow > ns.sensTime) ageMin = (tnow - ns.sensTime) / 60;
+    time_t tnow = time(nullptr);
+    if (tnow > ns.sensTime) ageMin = (int)((tnow - ns.sensTime) / 60);
   }
-  String ageStr = okE ? String(ageMin) : "--";
+  if (okE) snprintf(ageBuf, sizeof(ageBuf), "%d", ageMin);
 
-  uint16_t zoneCol = TFT_DARKGREY;
-  if (okE && !isnan(ns.sgv_mmol)) {
-    zoneCol = colorBySgvBounds(ns.sgv_mmol);
-  }
-///-----
-  uint16_t bg_color = RGB565(40, 40, 40);
+  const uint16_t bg_color = RGB565(40, 40, 40);
   sprite.fillSprite(bg_color);
 
   tm tml;
-  bool okTime = getLocalTime(&tml, 50); // 50ms таймаут
+  bool okTime = getLocalTime(&tml, 50);
 
-  // ===== Время =====
+  // Time / date strings
   char timeStr[6] = "--:--";
-  char dateStr[64];
-  char wdStr[64];
+  char dateStr[64] = "";
+  char wdStr[64]   = "";
+
   if (okTime) {
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d", tml.tm_hour, tml.tm_min);
     snprintf(dateStr, sizeof(dateStr), "%d %s %d", tml.tm_mday, MONTHS_RU[tml.tm_mon], tml.tm_year + 1900);
     snprintf(wdStr, sizeof(wdStr), "%s", WEEKDAYS_RU[tml.tm_wday]);
   }
 
-  // Время крупно
+  // Big time
+  sprite.setTextColor(TFT_DARKCYAN, bg_color);
   sprite.setTextDatum(MC_DATUM);
-  sprite.setTextColor(zoneCol, bg_color);
   sprite.loadFont(roninset2_180);
   sprite.drawString(timeStr, 160, 100);
   sprite.unloadFont();
 
-  // Дата ниже помельче
+  // Date line
   sprite.setTextDatum(BL_DATUM);
   sprite.setTextColor(TFT_LIGHTGREY, bg_color);
   sprite.loadFont(comfortaa_bold_18);
@@ -226,36 +259,52 @@ void drawClockScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
   sprite.setTextDatum(BR_DATUM);
   sprite.drawString(wdStr, 315, 170);
 
-  // данные ns
+  // NS line top
+  const uint16_t zoneCol = ns.zoneColor;
+
   sprite.setTextDatum(TL_DATUM);
   sprite.setTextColor(zoneCol, bg_color);
-  sprite.drawString(sgv, 6, 3);
+  sprite.drawString(sgvBuf, 6, 3);
+
+  // delta (right-aligned, NO String)
+  char topRight[16];
+  snprintf(topRight, sizeof(topRight), "%s", dltBuf);
 
   sprite.setTextDatum(TR_DATUM);
   sprite.setTextColor(zoneCol, bg_color);
-  sprite.drawString(dlt + " " + dir, 160, 3);
+  sprite.drawString(topRight, 150, 3);
 
+  // Arrow
   int x0 = 170;
-  int y0 = 3+8;
+  int y0 = 3 + 8;
   int a = 0;
   int dx = 0;
-  if (dir == "Flat")               a = 90;
-  else if (dir == "FortyFiveUp")   a = 45;
-  else if (dir == "FortyFiveDown") a = 135;
-  else if (dir == "SingleUp")      a = 0;
-  else if (dir == "SingleDown")    a = 180;
-  else if (dir == "DoubleUp") {    a = 0; dx = 8; } 
-  else if (dir == "DoubleDown") {  a = 180; dx = 8; }
+
+  if (okE) {
+    const char* dir =  ns.dir;
+    if      (!strcmp(dir, "Flat"))          a = 90;
+    else if (!strcmp(dir, "FortyFiveUp"))   a = 45;
+    else if (!strcmp(dir, "FortyFiveDown")) a = 135;
+    else if (!strcmp(dir, "SingleUp"))      a = 0;
+    else if (!strcmp(dir, "SingleDown"))    a = 180;
+    else if (!strcmp(dir, "DoubleUp"))    { a = 0;   dx = 8; }
+    else if (!strcmp(dir, "DoubleDown"))  { a = 180; dx = 8; }
+  }
+
   drawArrow(x0, y0, a, 16, 16, 8, dx, 1, 1, sprite, zoneCol);
 
-    // Age
+  // Age
   sprite.setTextDatum(TR_DATUM);
   sprite.setTextColor(okE ? TFT_DARKGREEN : TFT_DARKGREY, bg_color);
-  sprite.drawString(ageStr + " мин", 315, 3);
-  sprite.unloadFont();
 
+  char ageLine[20];
+  snprintf(ageLine, sizeof(ageLine), "%s мин", ageBuf);
+  sprite.drawString(ageLine, 315, 3);
+
+  sprite.unloadFont();
   sprite.pushSprite(0, 0);
 }
+
 
 ////
 
@@ -391,7 +440,7 @@ void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal) {
   const int gap    = 6;
 
   // ===== Layout =====
-  const int qrBig   = 101;  // WiFi QR width 
+  const int qrBig   = 101;  // WiFi QR width
   const int qrSmall = 58;   // URL QR width
 
   // Big QR top-left
@@ -400,55 +449,64 @@ void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal) {
 
   // Text block to the right of big QR
   const int t1X = qr1X + qrBig + gap;
-  const int t1Y = margin;
-  const int t1W = W - margin - t1X;
-  (void)t1W;
+  int y = 4;
 
   // Small QR bottom-right
   const int qr2X = W - margin - qrSmall;
   const int qr2Y = H - margin - qrSmall;
 
-  // Text left of small QR (aligned with qr2Y)
-  const int t2X = margin;
-  const int t2Y = qr2Y;
-  const int t2W = qr2X - gap - t2X;
-  (void)t2W;
+  // ===== Helpers (NO String) =====
+  auto wifiEscape = [](const char* in, char* out, size_t outLen) {
+    // Escape for WIFI QR: \ ; , :
+    // outLen must include '\0'
+    if (!out || outLen == 0) return;
+    size_t w = 0;
+    if (!in) { out[0] = 0; return; }
 
-  // ===== Helpers =====
-  auto escWifi = [](const String& s) {
-    String o; o.reserve(s.length() + 8);
-    for (size_t i = 0; i < s.length(); i++) {
-      char c = s[i];
-      if (c == '\\' || c == ';' || c == ',' || c == ':') o += '\\';
-      o += c;
+    for (size_t i = 0; in[i] != '\0'; i++) {
+      char c = in[i];
+      bool needSlash = (c == '\\' || c == ';' || c == ',' || c == ':');
+      if (needSlash) {
+        if (w + 1 >= outLen) break;
+        out[w++] = '\\';
+      }
+      if (w + 1 >= outLen) break;
+      out[w++] = c;
     }
-    return o;
+    out[w] = '\0';
   };
 
-  auto drawQr = [&](int bx, int by, int box, const String& payload,
+  auto buildUrl = [](const IPAddress& ip, char* out, size_t outLen) {
+    // "http://192.168.4.1/"
+    snprintf(out, outLen, "http://%u.%u.%u.%u/",
+             (unsigned)ip[0], (unsigned)ip[1], (unsigned)ip[2], (unsigned)ip[3]);
+  };
+
+  auto drawQr = [&](int bx, int by, int box, const char* payload,
                     // cache:
-                    String& lastPayload, QRCode& qr, uint8_t* qrData, int qrDataCap,
+                    char* lastPayload, size_t lastCap,
+                    QRCode& qr, uint8_t* qrData, int qrDataCap,
                     bool& ok, int& usedVer)
   {
-    // рамка
     sprite.drawRect(bx - 2, by - 2, box + 4, box + 4, TFT_DARKGREY);
 
+    if (!payload) payload = "";
+
     // rebuild only when payload changed
-    if (payload != lastPayload) {
-      lastPayload = payload;
+    if (strncmp(payload, lastPayload, lastCap) != 0) {
+      strlcpy(lastPayload, payload, lastCap);
       ok = false;
       usedVer = 0;
 
-      for (int ver = 3; ver <= 12; ver++) { 
+      for (int ver = 3; ver <= 12; ver++) {
         int need = qrcode_getBufferSize(ver);
         if (need > qrDataCap) continue;
 
-        qrcode_initText(&qr, qrData, ver, ECC_MEDIUM, payload.c_str());
+        qrcode_initText(&qr, qrData, ver, ECC_MEDIUM, payload);
         ok = true;
         usedVer = ver;
         break;
       }
-
     }
 
     if (!ok) {
@@ -458,7 +516,7 @@ void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal) {
       return;
     }
 
-    const int size = qr.size;           // modules count
+    const int size = qr.size;     // module count
     int scale = box / size;
     if (scale < 1) scale = 1;
 
@@ -466,7 +524,6 @@ void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal) {
     const int x0 = bx + (box - px) / 2;
     const int y0 = by + (box - px) / 2;
 
-    // белое поле + пиксели
     sprite.fillRect(x0, y0, px, px, TFT_WHITE);
     for (int j = 0; j < size; j++) {
       for (int i = 0; i < size; i++) {
@@ -477,16 +534,33 @@ void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal) {
     }
   };
 
-  // ===== Payloads =====
-  const String ssid = portal.apSsid();
-  const String pass = portal.apPass();
-  const String wifiPayload = "WIFI:T:WPA;S:" + escWifi(ssid) + ";P:" + escWifi(pass) + ";;";
+  // ===== Data (avoid copies) =====
+  const String& ssidS = portal.apSsid();
+  const String& passS = portal.apPass();
+  const IPAddress ip  = portal.apIP();
 
-  // URL
-  const String urlPayload = String("http://") + portal.apIP().toString() + "/"; // будет 192.168.4.1/
+  const char* ssid = ssidS.c_str();
+  const char* pass = passS.c_str();
 
-  // ===== QR caches (2 separate) =====
-  static String lastWifi, lastUrl;
+  // ===== Payloads in char buffers (NO String concat) =====
+  // Worst case with escaping: each char may become "\x" => x2
+  // ssid max 32, pass max 64 => need enough space
+  char ssidEsc[96];
+  char passEsc[192];
+  wifiEscape(ssid, ssidEsc, sizeof(ssidEsc));
+  wifiEscape(pass, passEsc, sizeof(passEsc));
+
+  char wifiPayload[320];
+  snprintf(wifiPayload, sizeof(wifiPayload),
+           "WIFI:T:WPA;S:%s;P:%s;;",
+           ssidEsc, passEsc);
+
+  char urlPayload[32];
+  buildUrl(ip, urlPayload, sizeof(urlPayload));
+
+  // ===== QR caches (NO String) =====
+  static char lastWifi[320] = {0};
+  static char lastUrl[32]   = {0};
 
   static QRCode  qrWifi;
   static uint8_t qrWifiData[512];
@@ -500,46 +574,44 @@ void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal) {
 
   // ===== Draw QR #1 (WiFi) =====
   drawQr(
-    qr1X, qr1Y+18, qrBig, wifiPayload,
-    lastWifi, qrWifi, qrWifiData, (int)sizeof(qrWifiData),
+    qr1X, qr1Y + 18, qrBig, wifiPayload,
+    lastWifi, sizeof(lastWifi),
+    qrWifi, qrWifiData, (int)sizeof(qrWifiData),
     qrWifiOk, qrWifiVer
   );
 
   // ===== Text #1 (right of WiFi QR) =====
   sprite.loadFont(comfortaa_bold_18);
-
-  int y = 2;
   sprite.setTextDatum(TC_DATUM);
   sprite.setTextColor(TFT_RED, bg);
-  sprite.drawString("ИНСТРУКЦИЯ", 160, y); 
+  sprite.drawString("ИНСТРУКЦИЯ ПО НАСТРОЙКЕ", 160, y);
   sprite.unloadFont();
   y += 18;
 
   sprite.loadFont(corporate_s_w10_16);
   sprite.setTextDatum(TL_DATUM);
+
   sprite.setTextColor(TFT_GREENYELLOW, bg);
-  sprite.drawString("1) Подключитесь к Wi-Fi:", t1X, y); 
+  sprite.drawString("1) Подключитесь к Wi-Fi:", t1X, y);
   y += 18;
-  // sprite.drawString("к Wi-Fi сети:", t1X, y); 
-  // y += 18;
 
   sprite.setTextColor(TFT_ORANGE, bg);
   sprite.drawString("SSID:", t1X, y);
   sprite.setTextColor(TFT_SKYBLUE, bg);
-  sprite.drawString(ssid,  t1X + 50, y); 
+  sprite.drawString(ssid, t1X + 50, y);
   y += 18;
 
   sprite.setTextColor(TFT_ORANGE, bg);
   sprite.drawString("PASS:", t1X, y);
   sprite.setTextColor(TFT_SKYBLUE, bg);
-  sprite.drawString(pass,  t1X + 50, y);
-
-   sprite.unloadFont();
+  sprite.drawString(pass, t1X + 50, y);
+  sprite.unloadFont();
 
   // ===== Draw QR #2 (URL) =====
   drawQr(
     qr2X, qr2Y, qrSmall, urlPayload,
-    lastUrl, qrUrl, qrUrlData, (int)sizeof(qrUrlData),
+    lastUrl, sizeof(lastUrl),
+    qrUrl, qrUrlData, (int)sizeof(qrUrlData),
     qrUrlOk, qrUrlVer
   );
 
@@ -547,14 +619,14 @@ void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal) {
   sprite.setTextDatum(BR_DATUM);
   sprite.loadFont(corporate_s_w10_16);
 
-  // 2 строки, чтобы точно влезло в t2W
   sprite.setTextColor(TFT_GREENYELLOW, bg);
-  sprite.drawString("2) Если портал не открылся,", 320 - qrSmall - 10, 170 - 2 -18);
-  sprite.drawString("перейдите на:", 320 - qrSmall - 10 - 18*8, 170-2);
+  sprite.drawString("2) Если портал не открылся,", 320 - qrSmall - 10, 170 - 2 - 18);
+  sprite.drawString("перейдите на ",               320 - qrSmall - 10 - 18 * 8, 170 - 2);
+
   sprite.setTextColor(TFT_SKYBLUE, bg);
-  sprite.drawString(urlPayload, 320 - qrSmall - 10, 170-2);
+  sprite.drawString(urlPayload, 320 - qrSmall - 10, 170 - 2);
 
   sprite.unloadFont();
-
   sprite.pushSprite(0, 0);
 }
+

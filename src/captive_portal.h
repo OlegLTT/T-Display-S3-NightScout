@@ -16,8 +16,10 @@ public:
 
   void tick(); // вызывать в loop()
 
-  String apSsid() const { return _apSsid; }
-  String apPass() const { return _apPass; }
+  // String apSsid() const { return _apSsid; }
+  // String apPass() const { return _apPass; }
+  const String& apSsid() const { return _apSsid; }
+  const String& apPass() const { return _apPass; }
   IPAddress apIP() const { return _apIP; }
 
 private:

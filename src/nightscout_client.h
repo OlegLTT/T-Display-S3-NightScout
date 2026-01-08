@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#include <TFT_eSPI.h>
 
 #ifndef NS_LOGI
   #define NS_LOGI(...) do { Serial.printf(__VA_ARGS__); Serial.print("\n"); } while(0)
@@ -53,6 +54,9 @@ struct NightscoutData {
   int    pumpBatPct    = -1;     // 0..100, -1 если неизвестно
   float  pumpBatV      = 0.0f;   // может быть 0 если не приходит
   time_t pumpTime      = 0;      // mills/1000 если есть
+
+  uint16_t zoneColor = TFT_DARKGREY; // кеш цвета зоны
+  bool     zoneValid = false;        // валиден ли цвет (есть sgv)
 };
 
 class NightscoutClient {
