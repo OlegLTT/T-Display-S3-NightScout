@@ -8,10 +8,8 @@ public:
 
   void show(uint8_t percent, uint32_t durationMs = 2000);
 
-  // true => нужно перерисовать базовый экран (показ/скрытие/изменение)
   bool update();
 
-  // рисует поверх уже отрисованного экрана
   void render();
 
   bool visible() const { return _visible; }

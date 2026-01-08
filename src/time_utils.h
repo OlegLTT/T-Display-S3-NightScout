@@ -1,5 +1,8 @@
 #pragma once
-#include <TimeLib.h>
+#include <Arduino.h>
+#include <stdint.h>
 
-bool isDST(time_t timestamp);
-void adjustTimezone(time_t& timestamp);
+void applyTimeConfig(int16_t tzMinutes, bool dstEnable,
+                     const char* ntp1="pool.ntp.org",
+                     const char* ntp2="time.nist.gov",
+                     const char* ntp3=nullptr);

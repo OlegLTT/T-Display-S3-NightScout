@@ -1,11 +1,6 @@
 #pragma once
 #include <Arduino.h>
 
-#if defined(ARDUINO_ARCH_ESP32)
-  #include <freertos/FreeRTOS.h>
-  #include <freertos/task.h>
-#endif
-
 class Button {
 public:
   using BtnCb = void (*)();
@@ -18,18 +13,15 @@ public:
 
   // timings (defaults as requested)
   uint32_t debounceMs    = 40;
-  uint32_t longPressMs   = 10000;
+  uint32_t longPressMs   = 5000;
   uint32_t doubleClickMs = 350;
   uint32_t repeatDelayMs = 600;
   uint32_t repeatEveryMs = 250;
 
-  // init per-platform
   void begin(uint8_t pin, bool activeLow = true, bool usePullup = true);
 
-  // optional manual polling
+  // manual polling
   void update();
-
-  // ⚠️ internal use (Buttons task)
   void updateAt(uint32_t now);
 
 private:
@@ -65,8 +57,8 @@ namespace Buttons {
 bool attach(Button* b);
 bool detach(Button* b);
 
-void beginTask();   // defaults: 20ms, core=1, 2048 words, prio=2
-void stopTask();
-bool isTaskRunning();
+// вместо beginTask/stopTask:
+void tick();                 // вызови в loop()
+//bool isTaskRunning();        // всегда false (для совместимости)
 
 } // namespace Buttons

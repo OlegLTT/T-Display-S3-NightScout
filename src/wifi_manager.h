@@ -3,7 +3,7 @@
 #include <WiFi.h>
 #include <WiFiMulti.h>
 
-#include "logs.h"   // ваш LogBuffer/LogLevel
+#include "logs.h" 
 
 struct WifiCred {
   const char* ssid;
@@ -38,12 +38,6 @@ public:
 
   // Запуск STA подключения
   bool begin();
-
-  bool isStaConnected() const;
-  bool isApMode() const;
-
-  IPAddress staIP() const { return WiFi.localIP(); }
-  IPAddress apIP() const  { return WiFi.softAPIP(); }
 
 private:
   WifiManagerConfig _cfg{};

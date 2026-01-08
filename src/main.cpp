@@ -1,8 +1,12 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
+#include <time.h>
+#include <TimeLib.h>
+#include "settings.h"
+#include "captive_portal.h"
+#include "time_utils.h"
 
-#include "credentials.h"
 #include "nightscout_client.h"
 #include "screens.h"
 #include "buttons.h"
@@ -11,29 +15,30 @@
 #include "logs.h"
 #include "wifi_manager.h"
 
+// == settings ====
+static SettingsStore settingsStore;
+AppSettings appCfg;
+static CaptivePortal portal;
+
 // ===== Wi-Fi =====
 static WifiManager wifiMgr;
 static WifiManagerConfig wifiCfg;
-
-// пример списка сетей (можно вынести в credentials.h)
-static const WifiCred WIFI_LIST[] = {
-  {WIFI_SSID, WIFI_PASS},
-  // {"MyWiFi2", "MyPass2"},
-  // {"OpenWiFi", ""}, // пример открытой
-};
 
 // ===== Display =====
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite sprite = TFT_eSprite(&tft);
 
 // ===== Screens state =====
-static uint32_t lastPoll = 0;
-static constexpr uint32_t POLL_INTERVAL = 15000; // 10 сек, как у вас было
+static constexpr uint32_t POLL_INTERVAL = 15000; // 15 сек, как у вас было
 static int currentScreen = 0;
+static uint8_t desiredUiScreen = 0;   // 0/1 то, что надо восстановить
 static constexpr int numScreens = 3; // 0=main, 1=clock, 2=logs
 static bool needUpdateScreen = true;
+static bool bootWaitNsSecond = true;   // при старте ждём успешные Entries+Props
 
 static LogBufferT<25, 96> logs;
+
+static volatile bool g_rebootRequested = false;
 
 // ===== Nightscout =====
 static NightscoutClient ns;
@@ -47,21 +52,51 @@ static Backlight backlight;
 static Button btnUser;
 static Button btnBoot;
 
+// --- Clock screen: instant redraw on minute change ---
+static int lastClockMin = -1;
+static int lastClockHour = -1;
+static int lastClockYday = -1; // на случай смены даты
+
+// ---- Daily NTP sync ----
+static time_t lastNtpSync = 0;
+static constexpr time_t NTP_SYNC_PERIOD = 24 * 60 * 60; // 24 часа
+
+static void saveUiScreenIfNeeded() {
+  if (currentScreen == 0 || currentScreen == 1) {
+    desiredUiScreen = (uint8_t)currentScreen;
+
+    appCfg.lastUiScreen = desiredUiScreen;
+    settingsStore.save(appCfg); // да, можно сохранять сразу (редко нажимаешь)
+    logs.addf(LogLevel::Info, "[UI] save last screen=%d", (int)desiredUiScreen);
+  }
+}
+
 static void onUserSingle() {
-  //currentScreen = (currentScreen + 1) % numScreens;
+  // ✅ если сейчас captive portal активен — single = reboot/exit
+  if (portal.active()) {
+    logs.add(LogLevel::Info, "[UI] USER single in CAPTIVE -> reboot");
+    g_rebootRequested = true;
+    return;
+  }
+
   if (currentScreen == 2) {
     currentScreen = 0;
   } else {
-    currentScreen = (currentScreen == 0) ? 1 : 0;  // только Main <-> Clock
+    currentScreen = (currentScreen == 0) ? 1 : 0;  // Main <-> Clock
   }
+
+  saveUiScreenIfNeeded();
   needUpdateScreen = true;
 }
+
 static void onUserLong() {
-  for(int i=0; i < 200;++i){
-    logs.addf(LogLevel::Info,  "USER long i=%d some text...", i);
-    logs.addf(LogLevel::Error, "USER long i=%d error text...", i);
-   }
+  // включаем режим настройки
+  currentScreen = 2;
+  // остановить обычный WiFi менеджер (не обязателен, но лучше)
+  WiFi.disconnect(true);
+  portal.begin(&logs, &settingsStore, &appCfg);
   needUpdateScreen = true;
+  logs.add(LogLevel::Info, "USER long -> start AP portal");
 }
 
 static void onBootSingle() {
@@ -73,29 +108,32 @@ static void onBootLong() {
   // Переходим на экран логов
   currentScreen = 2;
   needUpdateScreen = true;
-
   logs.add(LogLevel::Info, "BOOT long -> logs");
 }
 
 void setup() {
   Serial.begin(115200);
 
+  settingsStore.begin();
+  settingsStore.load(appCfg);
+
+  desiredUiScreen = (appCfg.lastUiScreen <= 1) ? appCfg.lastUiScreen : 0;
+
    // стартуем с лог-экрана
   currentScreen = 2;        // Logs
   needUpdateScreen = true;
-
-  // Лог: начало подключения
-  logs.add(
-    LogLevel::Info,
-    String("Connecting to Wi-Fi")
-  );
-  drawLogScreen(sprite, logs);   // сразу показать
 
   // Display
   tft.init();
   tft.setRotation(3);
   sprite.createSprite(320, 170);
   brOverlay.begin(tft, 320, 170);
+
+  // Лог: начало подключения
+  logs.add(
+    LogLevel::Info,
+    String("Connecting to Wi-Fi")
+  );
 
   // нарисовать лог-экран до ожидания WiFi
   drawLogScreen(sprite, logs);
@@ -112,54 +150,158 @@ void setup() {
   btnBoot.onLong   = onBootLong;
   Buttons::attach(&btnUser);
   Buttons::attach(&btnBoot);
-  Buttons::beginTask();
+  //Buttons::beginTask();
 
   // Backlight
   Backlight::Use(backlight);
   Backlight::beginStatic();
 
-// WiFi manager
+  // WiFi manager
   wifiCfg.hostname = "t-display-s3";
   wifiCfg.connectTimeoutMs = 20000;
   wifiCfg.retryDelayMs = 500;
   wifiCfg.enableAutoReconnect = true;
-  // если хотите fallback AP:
-  // wifiCfg.enableFallbackAP = false; // включите при необходимости
-  // wifiCfg.fallbackApSsid = "TDisplayS3-Setup";
-  // wifiCfg.fallbackApPass = "12345678";
   wifiMgr.setConfig(wifiCfg);
   wifiMgr.setLogger(&logs);
-  wifiMgr.addNetworks(WIFI_LIST, sizeof(WIFI_LIST)/sizeof(WIFI_LIST[0]));
+
+  WifiCred list[MAX_WIFI];
+  size_t cnt = 0;
+
+  for (int i = 0; i < MAX_WIFI; i++) {
+    if (appCfg.wifi[i].ssid[0] == 0) continue;
+    list[cnt].ssid = appCfg.wifi[i].ssid;
+    list[cnt].pass = appCfg.wifi[i].pass;
+    cnt++;
+  }
+  wifiMgr.addNetworks(list, cnt);
 
   bool wifiOk = wifiMgr.begin();
-  if (wifiOk) {
-    currentScreen = 0;        // экран 0 
-  } else {
-    currentScreen = 2;        // остаёмся на логах
-  }
-  needUpdateScreen = true;
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+currentScreen = 2;            // ВСЕГДА стартуем с логов
+needUpdateScreen = true;
+
+bootWaitNsSecond = wifiOk;    // ждём NS только если WiFi реально поднялся
+
+  // применяем TZ/DST
+ applyTimeConfig(appCfg.tzMinutes, appCfg.dstEnable);
 
   NSConfig c;
-  c.baseUrl = HOST_SITE; //cfg.nightscout_url;     // подставьте ваши имена
-  c.token   = ""; //cfg.nightscout_token;
-  c.sgvOnly = 0;//cfg.sgv_only;
-  c.showMgdl = 0; //cfg.show_mgdl;
-  c.infoLine = 3; //cfg.info_line;         // 2 или 3
+  c.baseUrl = String(appCfg.hostSite);      // подставьте ваши имена
   c.httpTimeoutMs = 15000;
   c.tlsInsecure = true;
 
   ns.begin(c);
+  ns.requestUpdate();
 }
 
 void loop() {
-  uint32_t nowMs = millis();
+  if (portal.active()) {
+    Buttons::tick();
+    portal.tick();
+
+    static uint32_t lastDraw = 0;
+    uint32_t nowMs = millis();
+
+    bool overlayChanged = brOverlay.update(); // ✅ обновляем оверлей даже в режиме портала
+
+    if (needUpdateScreen || (nowMs - lastDraw) > 500) {
+      drawPortalHelpScreen(sprite, portal);
+      needUpdateScreen = false;
+      lastDraw = nowMs;
+    }
+
+    // ✅ рисуем оверлей поверх уже отрисованного портала
+    if (brOverlay.visible()) {
+      brOverlay.render();
+    } else if (overlayChanged) {
+      // оверлей только что исчез -> надо один раз перерисовать базу,
+      // чтобы убрать "след"
+      needUpdateScreen = true;
+    }
+
+    if (g_rebootRequested) {
+      g_rebootRequested = false;
+      delay(150);
+      ESP.restart();
+    }
+
+    yield();
+    return;
+  }
+
+  Buttons::tick(); 
 
   // Nightscout poll
-  if (millis() - lastPoll >= POLL_INTERVAL) {
-    lastPoll = millis();
-    ns.update(nsData);
+    // ---- 15s tick + "fetch only if stale" ----
+  static uint32_t lastTickMs = 0;
+  static uint8_t  rcnt = 4; // чтобы первый stale-fetch мог случиться сразу
+
+  const uint32_t nowMs = millis();
+  if (nowMs - lastTickMs >= POLL_INTERVAL) { // POLL_INTERVAL у тебя = 15000
+    lastTickMs = nowMs;
+
+    // 1) считаем "возраст" данных по sensTime
+    // Берём системное время ESP32 (после configTime оно должно стать валидным)
+    time_t nowSec = time(nullptr);
+
+    // Если время ещё не синхронизировалось — считаем данные "старыми",
+    // но лимитер rcnt не даст спамить запросами
+    int32_t ageSec = INT32_MAX;
+    if (nowSec > 100000 && nsData.sensTime > 0 && nowSec >= nsData.sensTime) {
+      ageSec = (int32_t)(nowSec - nsData.sensTime);
+    }
+
+    static constexpr int32_t STALE_SEC = 305;     // как в оригинале
+    static constexpr uint8_t MIN_TICKS = 4;       // 4*15s = 60s минимум между fetch при stale
+
+    if (ageSec > STALE_SEC && rcnt >= MIN_TICKS) {
+      rcnt = 0;
+      logs.addf(LogLevel::Info, "[NS] stale age=%ds -> requestUpdate()", (int)ageSec);
+      ns.requestUpdate();
+    }
+
+    rcnt++;
+
+    // 2) даже без новых данных обновляем экран раз в 15 сек (чтобы время/age “тикало”)
+    if (currentScreen == 0 || currentScreen == 1) {
+      needUpdateScreen = true;
+    }
+  }
+
+  // ----- Clock screen: force redraw when minute changes (in addition to 15s tick) -----
+  if (currentScreen == 1) {
+    tm tml;
+    if (getLocalTime(&tml, 10)) {
+      // yday/hour/minute, чтобы корректно поймать переходы
+      if (tml.tm_min  != lastClockMin ||
+          tml.tm_hour != lastClockHour ||
+          tml.tm_yday != lastClockYday) {
+        lastClockMin  = tml.tm_min;
+        lastClockHour = tml.tm_hour;
+        lastClockYday = tml.tm_yday;
+        needUpdateScreen = true;   // мгновенно обновить время на экране часов
+      }
+    }
+  } else {
+    // ушли с часов — сброс, чтобы при возврате сразу обновилось
+    lastClockMin = lastClockHour = lastClockYday = -1;
+  }
+
+
+  // каждый проход loop делаем маленький шаг
+  bool nsChanged = ns.tick(nsData);
+  if (nsChanged) 
     needUpdateScreen = true;
+
+  // ----- Boot: switch to Main only after successful 2nd request (Entries + Props) -----
+  if (bootWaitNsSecond) {
+    // Важно: ждём именно оба флага (это означает, что 2-й запрос тоже успешно прошёл)
+    if (nsData.okEntries && nsData.okProps) {
+      bootWaitNsSecond = false;
+      //currentScreen = 0;          // теперь можно показывать Main
+      currentScreen = desiredUiScreen;   // восстановить 0/1
+      needUpdateScreen = true;
+      logs.add(LogLevel::Info, "[BOOT] NS entries+props OK -> show Main");
+    }
   }
 
    // update overlay timer
@@ -170,7 +312,7 @@ void loop() {
     if (currentScreen == 0) {
       drawMainScreen(sprite, nsData);
     } else if (currentScreen == 1) {
-      drawClockScreen(sprite);
+      drawClockScreen(sprite, nsData);
     } else {
       drawLogScreen(sprite, logs);
     }
@@ -183,5 +325,25 @@ void loop() {
   } else if (overlayChanged) {
     needUpdateScreen = true; // overlay just disappeared -> need to redraw base once to clear it
   }
+  
+  // ----- Daily NTP resync (once per 24h) -----
+  if (WiFi.status() == WL_CONNECTED) {
+    time_t now = time(nullptr);
 
+    // ждём, пока время станет валидным
+    if (now > 100000) {
+      if (lastNtpSync == 0) {
+        // первая валидная точка времени после старта
+        lastNtpSync = now;
+      } else if ((now - lastNtpSync) >= NTP_SYNC_PERIOD) {
+        Serial.println("[TIME] Daily NTP resync");
+
+        applyTimeConfig(appCfg.tzMinutes, appCfg.dstEnable);
+
+        lastNtpSync = now;
+      }
+    }
+  }
+
+  yield(); // на ESP32 это помогает планировщику/WiFi стэку
 }

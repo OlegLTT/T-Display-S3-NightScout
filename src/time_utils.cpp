@@ -1,28 +1,28 @@
 #include "time_utils.h"
+#include <time.h>
 
-// timezone
-static constexpr int timezone = 5; // как у вас
-static constexpr int timezoneOffset = timezone * SECS_PER_MIN;
+static void makeTzPosix(char* out, size_t outLen, int16_t tzMinutes) {
+  // POSIX TZ: знак инверсный
+  // UTC+5:30 => "UTC-5:30"
+  int total = tzMinutes;
+  int sign = (total >= 0) ? -1 : +1;
+  int a = abs(total);
+  int hh = a / 60;
+  int mm = a % 60;
 
-bool isDST(time_t timestamp) {
-  if (month(timestamp) < 3 || month(timestamp) > 11) return false;
-
-  int secondSunInMarch = 14 - ((5 * year(timestamp) / 4 + 1) % 7);
-  int firstSunInNovember = 7 - ((5 * year(timestamp) / 4 + 1) % 7);
-
-  if (month(timestamp) == 3) {
-    if (day(timestamp) > secondSunInMarch) return true;
-    else if (day(timestamp) == secondSunInMarch && hour(timestamp) >= 2) return true;
-  }
-
-  if (month(timestamp) == 11) {
-    if (day(timestamp) < firstSunInNovember) return true;
-    else if (day(timestamp) == firstSunInNovember && hour(timestamp) < 2) return true;
-  }
-  return false;
+  if (mm == 0) snprintf(out, outLen, "UTC%+d", sign * hh);
+  else         snprintf(out, outLen, "UTC%+d:%02d", sign * hh, mm);
 }
 
-void adjustTimezone(time_t& timestamp) {
-  timestamp += timezoneOffset * SECS_PER_MIN;
-  if (isDST(timestamp)) timestamp += SECS_PER_HOUR;
+
+void applyTimeConfig(int16_t tzMinutes, bool dstEnable,
+                     const char* ntp1, const char* ntp2, const char* ntp3) {
+  const long gmtOffsetSec = (long)tzMinutes * 60L;
+  const int  dstOffsetSec = dstEnable ? 3600 : 0;
+  configTime(gmtOffsetSec, dstOffsetSec, ntp1, ntp2, ntp3);
+
+  char tz[32];
+  makeTzPosix(tz, sizeof(tz), tzMinutes);
+  setenv("TZ", tz, 1);
+  tzset();
 }

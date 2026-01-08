@@ -105,35 +105,22 @@ void Button::update() {
   updateAt(millis());
 }
 
-// ---------- Buttons task ----------
+// ---------- Buttons (manual polling) ----------
 
 namespace Buttons {
 
 static constexpr size_t MAX_BTNS = 8;
 static Button* g_btns[MAX_BTNS] = {nullptr};
 
-#if defined(ARDUINO_ARCH_ESP32)
-static TaskHandle_t g_task = nullptr;
-static constexpr uint32_t POLL_MS     = 20;
-static constexpr int      CORE        = 1;
-static constexpr uint32_t STACK_WORDS = 2048;
-static constexpr UBaseType_t PRIO     = 2;
-
-static void tickAll() {
-  uint32_t now = millis();
+static void tickAll(uint32_t now) {
   for (auto& b : g_btns) {
     if (b) b->updateAt(now);
   }
 }
 
-static void taskFn(void*) {
-  TickType_t last = xTaskGetTickCount();
-  for (;;) {
-    tickAll();
-    vTaskDelayUntil(&last, pdMS_TO_TICKS(POLL_MS));
-  }
+void tick() {
+  tickAll(millis());
 }
-#endif
 
 bool attach(Button* b) {
   if (!b) return false;
@@ -159,36 +146,9 @@ bool detach(Button* b) {
   return false;
 }
 
-void beginTask() {
-#if defined(ARDUINO_ARCH_ESP32)
-  if (g_task) return;
-  xTaskCreatePinnedToCore(
-    taskFn,
-    "buttons",
-    STACK_WORDS,
-    nullptr,
-    PRIO,
-    &g_task,
-    CORE
-  );
-#endif
-}
-
-void stopTask() {
-#if defined(ARDUINO_ARCH_ESP32)
-  if (g_task) {
-    vTaskDelete(g_task);
-    g_task = nullptr;
-  }
-#endif
-}
-
-bool isTaskRunning() {
-#if defined(ARDUINO_ARCH_ESP32)
-  return g_task != nullptr;
-#else
-  return false;
-#endif
-}
+// bool isTaskRunning() {
+//   return false;
+// }
 
 } // namespace Buttons
+

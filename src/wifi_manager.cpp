@@ -42,8 +42,8 @@ bool WifiManager::begin() {
   WiFi.setAutoReconnect(_cfg.enableAutoReconnect);
 
   // очистка предыдущих состояний
-  WiFi.disconnect(true, true);
-  delay(100);
+  // WiFi.disconnect(, true);
+  // delay(100);
 
   uint32_t t0 = millis();
 
@@ -58,7 +58,6 @@ bool WifiManager::begin() {
         logI("[WiFi] ---- ok ----");
         return true;
     }
-
     delay(_cfg.retryDelayMs);
   }
 
@@ -74,14 +73,6 @@ bool WifiManager::begin() {
 
   logE("[WiFi] ---- fail ----");
   return false;
-}
-
-bool WifiManager::isStaConnected() const {
-  return (WiFi.status() == WL_CONNECTED) && (WiFi.getMode() & WIFI_STA);
-}
-
-bool WifiManager::isApMode() const {
-  return _apMode && (WiFi.getMode() & WIFI_AP);
 }
 
 void WifiManager::startFallbackAP() {
