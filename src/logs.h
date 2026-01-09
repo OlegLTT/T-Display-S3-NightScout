@@ -21,6 +21,7 @@ public:
     strlcpy(e.msg, s ? s : "", MSG_LEN);
     _head = (_head + 1) % CAP;
     if (_count < CAP) _count++;
+     _version++;          // <── увеличиваем «версию»
   }
 
   void add(LogLevel lvl, const String& s) {
@@ -45,11 +46,16 @@ public:
     while (idx < 0) idx += CAP;
     return _buf[idx];
   }
+  
+  uint32_t version() const {      // <── public accessor
+    return _version;
+  }
 
 private:
   Entry _buf[CAP]{};
   size_t _head = 0;
   size_t _count = 0;
+  uint32_t _version = 0; 
 };
 
 // --- Backward compatibility layer ---

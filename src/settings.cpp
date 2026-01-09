@@ -36,8 +36,7 @@ bool SettingsStore::load(AppSettings& out) {
   out.lastUiScreen = _prefs.getUChar("uiScr", 0);
   if (out.lastUiScreen > 1) out.lastUiScreen = 0; // только 0/1
 
-
-  // bounds
+  // границы SGV
   for (int i = 0; i < 4; i++) {
     char k[12];
     snprintf(k, sizeof(k), "b%d", i);
@@ -54,6 +53,15 @@ bool SettingsStore::load(AppSettings& out) {
 
   // host site
   readStr(_prefs, "host", out.hostSite, sizeof(out.hostSite), "");
+
+  // онбординг
+  out.onboardingDone = _prefs.getBool("onbDone", false);
+
+  // яркость подсветки (проценты 1..100, по умолчанию 100)
+  out.brightness = _prefs.getUChar("br", out.brightness);
+  if (out.brightness < 1 || out.brightness > 100) {
+    out.brightness = 100;
+  }
 
   return true;
 }
@@ -84,5 +92,29 @@ bool SettingsStore::save(const AppSettings& s) {
   // host site
   writeStr(_prefs, "host", s.hostSite, sizeof(s.hostSite));
 
+  // онбординг
+  _prefs.putBool("onbDone", s.onboardingDone);
+
+  // яркость подсветки
+  _prefs.putUChar("br", s.brightness);
+
   return true;
 }
+
+bool SettingsStore::factoryReset(AppSettings& out) {
+  // полностью очищаем NVS-namespace "appcfg"
+  _prefs.clear();
+
+  // сбрасываем структуру настроек к дефолту
+  out = AppSettings();  // использует значения по умолчанию из struct AppSettings
+
+  // при необходимости можно явно задать дефолтные границы, если в struct не заданы
+  out.sgvBounds[0] = 3.9f;
+  out.sgvBounds[1] = 4.5f;
+  out.sgvBounds[2] = 9.f;
+  out.sgvBounds[3] = 11.f;
+
+  // сохраняем дефолтные настройки в NVS, чтобы всё было консистентно
+  return save(out);
+}
+

@@ -13,7 +13,7 @@ public:
 
   // timings (defaults as requested)
   uint32_t debounceMs    = 40;
-  uint32_t longPressMs   = 5000;
+  uint32_t longPressMs   = 4000;
   uint32_t doubleClickMs = 350;
   uint32_t repeatDelayMs = 600;
   uint32_t repeatEveryMs = 250;

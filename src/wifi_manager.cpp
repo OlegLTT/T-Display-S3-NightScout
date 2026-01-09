@@ -2,7 +2,17 @@
 
 void WifiManager::logI(const String& s) {
   Serial.println(s);
-  if (_logs) _logs->add(LogLevel::Info, s);
+  if (!_logs) return;
+
+  // В буфер пишем только ключевые параметры Wi-Fi
+  if (s.startsWith("[WiFi] CONNECTED") ||
+      s.startsWith("[WiFi] IP") ||
+      s.startsWith("[WiFi] RSSI") ||
+      s.startsWith("[WiFi] status") ||
+      s.startsWith("[WiFi] hostname") ||
+      s.startsWith("[WiFi] timeout")) {
+    _logs->add(LogLevel::Info, s);
+  }
 }
 
 void WifiManager::logW(const String& s) {
@@ -41,10 +51,6 @@ bool WifiManager::begin() {
   if (_cfg.hostname && _cfg.hostname[0]) WiFi.setHostname(_cfg.hostname);
   WiFi.setAutoReconnect(_cfg.enableAutoReconnect);
 
-  // очистка предыдущих состояний
-  // WiFi.disconnect(, true);
-  // delay(100);
-
   uint32_t t0 = millis();
 
   while ((millis() - t0) < _cfg.connectTimeoutMs) {
@@ -53,14 +59,22 @@ bool WifiManager::begin() {
     if (st == WL_CONNECTED) {
         logI(String("[WiFi] CONNECTED: SSID='") + WiFi.SSID() + "'");
         logI(String("[WiFi] IP       : ") + WiFi.localIP().toString());
-        logI(String("[WiFi] RSSI     : ") + String(WiFi.RSSI()) + " dBm");
+
+        int rssi = WiFi.RSSI();
+        logI(String("[WiFi] RSSI     : ") + String(rssi) + " dBm");
+
+        // Предупреждение о слабом сигнале
+        if (rssi < -75 && _logs) {
+          _logs->add(LogLevel::Warn,
+                     String("[WiFi] Слабый сигнал: ") + String(rssi) + " dBm");
+        }
+
         logStatus("[WiFi] status  : ");
         logI("[WiFi] ---- ok ----");
         return true;
     }
     delay(_cfg.retryDelayMs);
   }
-
 
   logE("[WiFi] CONNECT TIMEOUT");
   logStatus("[WiFi] status  : ");

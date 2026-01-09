@@ -1,5 +1,4 @@
 #include "screens.h"
-#include <TimeLib.h>
 #include "time_utils.h"
 
 #include "font_roninset2_180.h"
@@ -16,6 +15,52 @@
 
 
 #define RGB565(r, g, b) (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3))
+
+static const char* MONTHS_RU[] = { "января", "февраля",    "марта",  "апреля",    "мая",    "июня", 
+                                     "июля", "августа", "сентября", "октября", "ноября", "декабря"};
+
+static const char* WEEKDAYS_RU[] = {  "Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"};
+
+static void drawAgeBadge(TFT_eSprite& sprite,
+                         const char* ageBuf,
+                         bool haveAge,
+                         int ageCat,
+                         uint16_t bg_color)
+{
+  // геометрия бейджа в правом верхнем углу
+  const int ageW = 80;
+  const int ageH = 18;
+  const int ageX = 320 - 5 - ageW;  // 5px от правого края
+  const int ageY = 2;
+
+  // цвета по категории
+  uint16_t ageBox = bg_color;      // фон бейджа
+  uint16_t ageFg  = TFT_DARKGREY;  // цвет текста
+
+  if (haveAge) {
+    if (ageCat == 1) {            // <= 5 мин — зелёный текст, фон как фон экрана
+      ageBox = bg_color;
+      ageFg  = TFT_DARKGREEN;
+    } else if (ageCat == 2) {     // 5..15 
+      ageBox = bg_color;
+      ageFg  = TFT_YELLOW;
+    } else if (ageCat == 3) {     // >15 — белый на красном
+      ageBox = TFT_RED;
+      ageFg  = TFT_WHITE;
+    }
+  }
+
+  // сам прямоугольник
+  sprite.fillRoundRect(ageX, ageY, ageW, ageH, 4, ageBox);
+
+  // текст по центру бейджа
+  sprite.setTextDatum(MC_DATUM);
+  sprite.setTextColor(ageFg, ageBox);
+
+  char ageLine[20];
+  snprintf(ageLine, sizeof(ageLine), "%s мин", ageBuf);
+  sprite.drawString(ageLine, ageX + ageW / 2, ageY + ageH / 2);
+}
 
 
 static void drawArrow(int x, int y, int angle, int lenght, int width, int tip, int dx, int wl, int w0, TFT_eSprite& sprite, uint16_t color)
@@ -93,13 +138,34 @@ void drawMainScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
     snprintf(cobBuf, sizeof(cobBuf), "%.1f", ns.cob);
   }
 
-  int ageMin = 0;
+  // ---- AGE + категории свежести ----
+  bool   haveAge = false;
+  int    ageMin  = 0;
+  int    ageCat  = 0;   // 0=нет, 1<=5мин, 2<=15мин, 3>15мин
+
   if (okE && ns.sensTime > 0) {
     time_t tnow = time(nullptr);
-    if (tnow > ns.sensTime) ageMin = (int)((tnow - ns.sensTime) / 60);
+    if (tnow > ns.sensTime) {
+      ageMin = (int)((tnow - ns.sensTime) / 60);
+      haveAge = true;
+    }
   }
-  if (okE) snprintf(ageBuf, sizeof(ageBuf), "%d", ageMin);
 
+  if (haveAge) {
+    snprintf(ageBuf, sizeof(ageBuf), "%d", ageMin);
+
+    if (ageMin <= 5)        ageCat = 1;
+    else if (ageMin <= 15)  ageCat = 2;
+    else                    ageCat = 3;
+  }
+
+  // Если данные слишком старые -> сбрасываем отображение
+  if (ageCat == 3) {
+    strncpy(sgvBuf, "--", sizeof(sgvBuf));
+    strncpy(dltBuf, "--", sizeof(dltBuf));
+    strncpy(iobBuf, "--", sizeof(iobBuf));
+    strncpy(cobBuf, "--", sizeof(cobBuf));
+  }
 
   // --- draw ---
   const uint16_t bg_color = RGB565(40, 40, 40);
@@ -122,52 +188,79 @@ void drawMainScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
   snprintf(tmp, sizeof(tmp), "C: %s", cobBuf);
   sprite.drawString(tmp, 120, 170);
 
-  // Age
-  sprite.setTextDatum(TR_DATUM);
-  sprite.setTextColor(okE ? TFT_DARKGREEN : TFT_DARKGREY, bg_color);
+ // Age badge
+  drawAgeBadge(sprite, ageBuf, haveAge, ageCat, bg_color);
 
-  char ageLine[20];
-  snprintf(ageLine, sizeof(ageLine), "%s мин", ageBuf);
-  sprite.drawString(ageLine, 315, 3);
 
-  // Pump battery (use tmp buffer too)
-  sprite.setTextDatum(TC_DATUM);
-  sprite.drawRect(5, 2, 42, 18, TFT_DARKGREY);
-  sprite.drawRect(2, 6, 3, 10, TFT_DARKGREY);
+  // ---- Pump battery ----
+  sprite.setTextDatum(TL_DATUM);
 
+  // geometry
+  const int bx = 5;     // main box X
+  const int by = 2;     // Y
+  const int bw = 42;    // width
+  const int bh = 18;    // height
+
+  // "усик"
+  sprite.drawRect(bx-3, by+4, 3, bh-8, TFT_DARKGREY);
+
+  // рамка батареи
+  sprite.drawRect(bx, by, bw, bh, TFT_DARKGREY);
+
+  // данные
   if (ns.okDevStatus && ns.pumpBatValid) {
-    snprintf(tmp, sizeof(tmp), "%d%%", ns.pumpBatPct);
-    sprite.drawString(tmp, 48 - 42 / 2, 4);
+      int pct = ns.pumpBatPct;
+      if (pct < 0) pct = 0;
+      if (pct > 100) pct = 100;
+
+      // выбор цвета для ТЕКСТА
+      uint16_t batCol =
+          (pct >= 50) ? TFT_GREEN :
+          (pct >= 15) ? TFT_YELLOW :
+                        TFT_RED;
+
+      // заливка справа -> налево
+      int fillW = (bw - 2) * pct / 100;
+      if (fillW < 0) fillW = 0;
+
+      if (fillW > 0) {
+          // начало справа
+          int fx = bx + (bw - 1 - fillW);
+          int fy = by + 1;
+          sprite.fillRect(fx, fy, fillW, bh - 2, batCol);
+      }
+
+      // текст рядом
+      snprintf(tmp, sizeof(tmp), "%d%%", pct);
+      sprite.setTextColor(TFT_DARKGREY, bg_color);
+      sprite.drawString(tmp, bx + bw + 2, by + 2);
+
+  } else {
+      // нет данных
+      sprite.setTextColor(TFT_DARKGREY, bg_color);
+      sprite.drawString("--", bx + bw + 2, by + 2);
   }
+
+
   sprite.unloadFont();
 
   // SGV big
   const uint16_t zoneCol = ns.zoneColor;
 
-  // sgv big
   sprite.setTextDatum(MC_DATUM);
   sprite.loadFont(roninset2_180);
 
-  sprite.setTextColor(ns.zoneValid ? zoneCol : TFT_DARKGREY, bg_color);
+  // если данные очень старые, показываем "--" серым
+  uint16_t sgvCol = (ageCat == 3 || !ns.zoneValid) ? TFT_DARKGREY : zoneCol;
+  sprite.setTextColor(sgvCol, bg_color);
   sprite.drawString(sgvBuf, 120, 100);
   sprite.unloadFont();
 
-  // sprite.setTextDatum(MC_DATUM);
-  // sprite.loadFont(roninset2_180);
-
-  // uint16_t sgvCol = TFT_DARKGREY;
-  // if (okE && !isnan(ns.sgv_mmol)) {
-  //   sgvCol = colorBySgvBounds(ns.sgv_mmol);
-  // }
-  // sprite.setTextColor(sgvCol, bg_color);
-  // sprite.drawString(sgvBuf, 120, 100);
-  // sprite.unloadFont();
-
-  // Trend arrow (NO String dir)
+  // Trend arrow
   const int x0 = 320 - 42;
   const int y0 = 170 - 42;
 
-  if (okE) {
+  if (okE && ageCat != 3) { // при старых данных стрелку не рисуем
     int a = 0;
     int dx = 0;
 
@@ -186,7 +279,9 @@ void drawMainScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
   // Delta
   sprite.setTextDatum(BC_DATUM);
   sprite.loadFont(volkswagen_medium_36);
-  sprite.setTextColor(okP ? TFT_SKYBLUE : TFT_DARKGREY, bg_color);
+
+  uint16_t dltCol = (ageCat == 3 || !okP) ? TFT_DARKGREY : TFT_SKYBLUE;
+  sprite.setTextColor(dltCol, bg_color);
   sprite.drawString(dltBuf, x0, y0 - 50);
   sprite.unloadFont();
 
@@ -194,13 +289,6 @@ void drawMainScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
 }
 
 
-
-
-////
-static const char* MONTHS_RU[] = { "января", "февраля",    "марта",  "апреля",    "мая",    "июня", 
-                                     "июля", "августа", "сентября", "октября", "ноября", "декабря"};
-
-static const char* WEEKDAYS_RU[] = {  "Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"};
 
 void drawClockScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
   const bool okE = ns.okEntries;
@@ -219,12 +307,32 @@ void drawClockScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
     snprintf(dltBuf, sizeof(dltBuf), "%+.1f", ns.delta_mmol);
   }
 
-  int ageMin = 0;
+  // ---- AGE + категории ----
+  bool   haveAge = false;
+  int    ageMin  = 0;
+  int    ageCat  = 0;   // 0=нет, 1<=5, 2<=15, 3>15
+
   if (okE && ns.sensTime > 0) {
     time_t tnow = time(nullptr);
-    if (tnow > ns.sensTime) ageMin = (int)((tnow - ns.sensTime) / 60);
+    if (tnow > ns.sensTime) {
+      ageMin = (int)((tnow - ns.sensTime) / 60);
+      haveAge = true;
+    }
   }
-  if (okE) snprintf(ageBuf, sizeof(ageBuf), "%d", ageMin);
+
+  if (haveAge) {
+    snprintf(ageBuf, sizeof(ageBuf), "%d", ageMin);
+
+    if (ageMin <= 5)        ageCat = 1;
+    else if (ageMin <= 15)  ageCat = 2;
+    else                    ageCat = 3;
+  }
+
+  // если протухло — сбрасываем отображаемые NS-поля
+  if (ageCat == 3) {
+    strncpy(sgvBuf, "--", sizeof(sgvBuf));
+    strncpy(dltBuf, "--", sizeof(dltBuf));
+  }
 
   const uint16_t bg_color = RGB565(40, 40, 40);
   sprite.fillSprite(bg_color);
@@ -239,12 +347,13 @@ void drawClockScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
 
   if (okTime) {
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d", tml.tm_hour, tml.tm_min);
-    snprintf(dateStr, sizeof(dateStr), "%d %s %d", tml.tm_mday, MONTHS_RU[tml.tm_mon], tml.tm_year + 1900);
+    snprintf(dateStr, sizeof(dateStr), "%d %s %d",
+             tml.tm_mday, MONTHS_RU[tml.tm_mon], tml.tm_year + 1900);
     snprintf(wdStr, sizeof(wdStr), "%s", WEEKDAYS_RU[tml.tm_wday]);
   }
 
   // Big time
-  sprite.setTextColor(TFT_DARKCYAN, bg_color);
+  sprite.setTextColor(TFT_MAGENTA, bg_color);
   sprite.setTextDatum(MC_DATUM);
   sprite.loadFont(roninset2_180);
   sprite.drawString(timeStr, 160, 100);
@@ -261,27 +370,28 @@ void drawClockScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
 
   // NS line top
   const uint16_t zoneCol = ns.zoneColor;
+  uint16_t zoneColUsed = (ageCat == 3 ? TFT_DARKGREY : zoneCol);
 
   sprite.setTextDatum(TL_DATUM);
-  sprite.setTextColor(zoneCol, bg_color);
+  sprite.setTextColor(zoneColUsed, bg_color);
   sprite.drawString(sgvBuf, 6, 3);
 
-  // delta (right-aligned, NO String)
+  // delta (right-aligned)
   char topRight[16];
   snprintf(topRight, sizeof(topRight), "%s", dltBuf);
 
   sprite.setTextDatum(TR_DATUM);
-  sprite.setTextColor(zoneCol, bg_color);
+  sprite.setTextColor(zoneColUsed, bg_color);
   sprite.drawString(topRight, 150, 3);
 
   // Arrow
   int x0 = 170;
   int y0 = 3 + 8;
-  int a = 0;
+  int a  = 0;
   int dx = 0;
 
-  if (okE) {
-    const char* dir =  ns.dir;
+  if (okE && ageCat != 3) {  // старые данные -> стрелку не рисуем
+    const char* dir = ns.dir;
     if      (!strcmp(dir, "Flat"))          a = 90;
     else if (!strcmp(dir, "FortyFiveUp"))   a = 45;
     else if (!strcmp(dir, "FortyFiveDown")) a = 135;
@@ -291,29 +401,33 @@ void drawClockScreen(TFT_eSprite& sprite, const NightscoutData& ns) {
     else if (!strcmp(dir, "DoubleDown"))  { a = 180; dx = 8; }
   }
 
-  drawArrow(x0, y0, a, 16, 16, 8, dx, 1, 1, sprite, zoneCol);
+  if (okE && ageCat != 3) {
+    drawArrow(x0, y0, a, 16, 16, 8, dx, 1, 1, sprite, zoneColUsed);
+  }
 
-  // Age
-  sprite.setTextDatum(TR_DATUM);
-  sprite.setTextColor(okE ? TFT_DARKGREEN : TFT_DARKGREY, bg_color);
-
-  char ageLine[20];
-  snprintf(ageLine, sizeof(ageLine), "%s мин", ageBuf);
-  sprite.drawString(ageLine, 315, 3);
+  // Age badge
+  drawAgeBadge(sprite, ageBuf, haveAge, ageCat, bg_color);
 
   sprite.unloadFont();
   sprite.pushSprite(0, 0);
 }
 
-
-////
-
-static int drawWrappedLine(TFT_eSprite& sprite, const String& text, int x, int y,
-                           int maxW, int lineH, int maxLines)
+// Обёртка строки с переносами без использования Arduino String
+static int drawWrappedLine(TFT_eSprite& sprite,
+                           const char* text,
+                           int x, int y,
+                           int maxW,
+                           int lineH,
+                           int maxLines)
 {
+  if (!text) return 0;
+
+  const int n = strlen(text);
   int linesUsed = 0;
   int start = 0;
-  const int n = (int)text.length();
+
+  // локальный буфер под одну строку
+  char lineBuf[128];
 
   while (start < n && linesUsed < maxLines) {
     // пропустить ведущие пробелы
@@ -323,41 +437,68 @@ static int drawWrappedLine(TFT_eSprite& sprite, const String& text, int x, int y
     int end = start;
     int lastSpace = -1;
 
-    // расширяем до тех пор, пока влезает
+    // подбираем максимально возможный фрагмент, который влезает в maxW
     while (end < n) {
       char c = text[end];
       if (c == ' ') lastSpace = end;
 
-      String candidate = text.substring(start, end + 1);
-      if (sprite.textWidth(candidate) > maxW) break;
+      int len = end - start + 1;
+      if (len >= (int)sizeof(lineBuf)) {
+        // больше не влазит в наш буфер — останавливаемся
+        break;
+      }
+
+      memcpy(lineBuf, text + start, len);
+      lineBuf[len] = '\0';
+
+      if (sprite.textWidth(lineBuf) > maxW) {
+        break;
+      }
       end++;
     }
 
     int cut;
     if (end == start) {
-      // даже 1 символ не влез — аварийный сдвиг
+      // даже один символ не влез по ширине -> аварийный сдвиг
       cut = start + 1;
     } else if (end >= n) {
-      // всё влезло
+      // дошли до конца строки
       cut = n;
     } else {
-      // не влезло на end
+      // на end уже НЕ влазит
       if (lastSpace >= start) {
-        cut = lastSpace; // перенос по пробелу
+        // перенос по последнему пробелу
+        cut = lastSpace;
       } else {
-        cut = end;       // перенос внутри слова
+        // перенос внутри слова
+        cut = end;
       }
     }
 
-    String line = text.substring(start, cut);
-    line.trim(); // убрать пробелы по краям
-    sprite.drawString(line, x, y + linesUsed * lineH);
+    int len = cut - start;
+    if (len <= 0) {
+      // защищаемся от зацикливания
+      start++;
+      continue;
+    }
+    if (len >= (int)sizeof(lineBuf)) {
+      len = sizeof(lineBuf) - 1;
+    }
 
-    linesUsed++;
+    memcpy(lineBuf, text + start, len);
+    // тримим хвостовые пробелы
+    while (len > 0 && (lineBuf[len - 1] == ' ' || lineBuf[len - 1] == '\t')) {
+      len--;
+    }
+    lineBuf[len] = '\0';
 
-    // следующий кусок: после пробела (если перенос по пробелу)
+    if (len > 0) {
+      sprite.drawString(lineBuf, x, y + linesUsed * lineH);
+      linesUsed++;
+    }
+
+    // следующий кусок
     start = cut;
-    while (start < n && text[start] == ' ') start++;
   }
 
   return linesUsed;
@@ -366,40 +507,53 @@ static int drawWrappedLine(TFT_eSprite& sprite, const String& text, int x, int y
 void drawLogScreen(TFT_eSprite& sprite, const LogBuffer& logs) {
   const uint16_t bg = TFT_BLACK;
   sprite.fillSprite(bg);
-  
-  sprite.unloadFont();   // ← ОБЯЗАТЕЛЬНО
+
+  sprite.unloadFont();   // как у тебя было
   sprite.setTextFont(1);
   sprite.setTextSize(1);
   sprite.setTextDatum(TL_DATUM);
 
-  const int lineH = sprite.fontHeight();
-  const int screenW = 320;
-  const int screenH = 170;
-  int linesTotal = screenH / lineH;
+  const int lineH   = sprite.fontHeight();
+  const int screenW = sprite.width();   // у тебя 320, но лучше так
+  const int screenH = sprite.height();  // 170
+  const int linesTotal = screenH / lineH;
 
   struct Item {
     LogEntry e;
     int lines;
   };
 
-  Item items[32];   // запас (у тебя LogBuffer = 25)
+  Item items[32];   // запас (LogBuffer = 25)
   int itemCount = 0;
   int usedLines = 0;
 
+  const size_t cnt = logs.count();
+
   // 1) Считаем с КОНЦА (самые новые), пока влезает
-  for (int i = 0; i < (int)logs.count(); i++) {
+  for (size_t i = 0; i < cnt && itemCount < (int)(sizeof(items)/sizeof(items[0])); i++) {
     LogEntry e = logs.getNewestFirst(i);
 
-    String msg = String(e.ms / 1000) + " " + e.msg;
-    int lines = max(1, (sprite.textWidth(msg) + screenW - 1) / screenW);
+    // Собираем "секунды msg" в C-строку
+    char msgBuf[128];
+    unsigned long sec = e.ms / 1000UL;
+    // "%lu " + msg
+    snprintf(msgBuf, sizeof(msgBuf), "%lu %s", sec, e.msg);
 
-    if (usedLines + lines > linesTotal) break;
+    int w = sprite.textWidth(msgBuf);
+    int lines = (w <= 0) ? 1 : (w + screenW - 1) / screenW;
+    if (lines < 1) lines = 1;
 
-    items[itemCount++] = { e, lines };
+    if (usedLines + lines > linesTotal) {
+      break;
+    }
+
+    items[itemCount].e     = e;
+    items[itemCount].lines = lines;
+    itemCount++;
     usedLines += lines;
   }
 
-  // 2) Рисуем в ОБРАТНОМ порядке → старые сверху
+  // 2) Рисуем в ОБРАТНОМ порядке → старые сверху, новые снизу
   int y = 0;
   for (int i = itemCount - 1; i >= 0; i--) {
     const LogEntry& e = items[i].e;
@@ -410,11 +564,13 @@ void drawLogScreen(TFT_eSprite& sprite, const LogBuffer& logs) {
 
     sprite.setTextColor(col, bg);
 
-    String msg = String(e.ms / 1000) + " " + e.msg;
+    char msgBuf[128];
+    unsigned long sec = e.ms / 1000UL;
+    snprintf(msgBuf, sizeof(msgBuf), "%lu %s", sec, e.msg);
 
     int used = drawWrappedLine(
       sprite,
-      msg,
+      msgBuf,
       0,
       y,
       screenW,
@@ -423,11 +579,11 @@ void drawLogScreen(TFT_eSprite& sprite, const LogBuffer& logs) {
     );
 
     y += used * lineH;
+    if (y >= screenH) break;
   }
 
   sprite.pushSprite(0, 0);
 }
-
 
 void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal) {
   const uint16_t bg = TFT_BLACK;
@@ -625,6 +781,92 @@ void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal) {
 
   sprite.setTextColor(TFT_SKYBLUE, bg);
   sprite.drawString(urlPayload, 320 - qrSmall - 10, 170 - 2);
+
+  sprite.unloadFont();
+  sprite.pushSprite(0, 0);
+}
+
+void drawFirstScreen(TFT_eSprite& sprite) {
+  const uint16_t bg = TFT_BLACK;
+  sprite.fillSprite(bg);
+
+  // ===== Заголовок =====
+  sprite.loadFont(comfortaa_bold_18);
+  sprite.setTextDatum(TC_DATUM);
+  sprite.setTextColor(TFT_RED, bg);
+  sprite.drawString("ДОБРО ПОЖАЛОВАТЬ!", 160, 6);
+  sprite.unloadFont();
+
+  sprite.loadFont(corporate_s_w10_16);
+
+  // ------- Блок BOOT (верхняя часть) -------
+  int yL = 30;
+  sprite.setTextColor(TFT_SKYBLUE, bg);
+  sprite.drawString("Кнопка сверху", 160, yL);
+
+  yL += 18;
+  sprite.setTextDatum(TR_DATUM);
+  sprite.setTextColor(TFT_ORANGE, bg);
+  sprite.drawString("Нажатие:", 155, yL);
+
+  sprite.setTextDatum(TL_DATUM);
+  sprite.setTextColor(TFT_LIGHTGREY, bg);
+  sprite.drawString("яркость подсветки", 165, yL);
+
+  yL += 18;
+  sprite.setTextDatum(TR_DATUM);
+  sprite.setTextColor(TFT_ORANGE, bg);
+  sprite.drawString("Долгое (5 сек):", 155, yL);
+
+  sprite.setTextDatum(TL_DATUM);
+  sprite.setTextColor(TFT_LIGHTGREY, bg);
+  sprite.drawString("консоль ошибок", 165, yL);
+
+  // ------- Блок USER (нижняя часть) -------
+  int yR = 90;
+  sprite.setTextDatum(TC_DATUM);
+  sprite.setTextColor(TFT_SKYBLUE, bg);
+  sprite.drawString("Кнопка снизу", 160, yR);
+
+  yR += 18;
+  sprite.setTextDatum(TR_DATUM);
+  sprite.setTextColor(TFT_ORANGE, bg);
+  sprite.drawString("Нажатие:", 155, yR);
+
+  sprite.setTextDatum(TL_DATUM);
+  sprite.setTextColor(TFT_LIGHTGREY, bg);
+  sprite.drawString("смена экранов", 165, yR);
+
+  yR += 18;
+  sprite.setTextDatum(TR_DATUM);
+  sprite.setTextColor(TFT_ORANGE, bg);
+  sprite.drawString("Долгое (5 сек):", 155, yR);
+
+  sprite.setTextDatum(TL_DATUM);
+  sprite.setTextColor(TFT_LIGHTGREY, bg);
+  sprite.drawString("настройки", 165, yR);
+  sprite.unloadFont();
+
+  yR += 24;
+  sprite.setTextDatum(TC_DATUM);
+  sprite.loadFont(comfortaa_bold_18);
+  //sprite.setTextColor(TFT_RED, bg);
+  sprite.fillRoundRect(40, 170-20, 240, 18, 4, TFT_RED);
+  sprite.setTextColor(TFT_WHITE, TFT_RED);
+  sprite.drawString("Начните с настройки!", 160, yR);
+
+  // ===== Линии к кнопкам + стрелки =====
+  uint16_t lc = TFT_DARKGREEN;
+  // --- BOOT (верхняя кнопка) ---
+  // основная линия от текста к кнопке
+  sprite.drawWedgeLine(108, 35,  2, 25, 2, 1, lc);
+  sprite.drawWedgeLine(18,  18,  2, 25, 2, 1, lc);
+  sprite.drawWedgeLine(16,  34,  2, 25, 2, 1, lc);
+  // --- USER (нижняя кнопка) ---
+  // основная линия от текста к нижней кнопке
+  sprite.drawWedgeLine(112, 96,  2, 133, 2, 1, lc);
+  sprite.drawWedgeLine(14, 121,  2, 133, 2, 1, lc);
+  sprite.drawWedgeLine(19, 136,  2, 133, 2, 1, lc);
 
   sprite.unloadFont();
   sprite.pushSprite(0, 0);

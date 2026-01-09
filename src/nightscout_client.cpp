@@ -1,15 +1,16 @@
 #include "nightscout_client.h"
 #include "sgv_zone.h"
+
 // -------------------- Public API --------------------
 
 void NightscoutClient::begin(const NSConfig& cfg) {
   _cfg = cfg;
+  _hostError = false;      // <<< при новом конфиге считаем, что всё ок
 }
 
 void NightscoutClient::requestUpdate() {
   _wantUpdate = true;
 }
-
 
 static inline void updateZoneCache(NightscoutData& ns) {
   if (ns.okEntries && !isnan(ns.sgv_mmol)) {
@@ -20,7 +21,6 @@ static inline void updateZoneCache(NightscoutData& ns) {
     ns.zoneValid = false;
   }
 }
-
 
 // -------------------- Helpers --------------------
 
@@ -112,8 +112,8 @@ void NightscoutClient::startReq(ReqKind k, const String& base) {
   _r.tLastIO = _r.tStart;
 
   String full;
-  if (k == ReqKind::Entries)       full = makeEntriesPath(base);
-  else if (k == ReqKind::Props)   full = makePropsPath(base);
+  if (k == ReqKind::Entries)        full = makeEntriesPath(base);
+  else if (k == ReqKind::Props)     full = makePropsPath(base);
   else if (k == ReqKind::DevStatus) full = makeDevStatusPath(base);
   else full = "";
 
@@ -150,7 +150,15 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
     case Phase::Connect: {
       bool ok = c->connect(r.host.c_str(), r.port);
       r.tLastIO = now;
-      if (!ok) { r.ph = Phase::Error; break; }
+      if (!ok) {
+        // <<< КЛЮЧЕВОЕ МЕСТО: коннект не удался — считаем host фатально битым
+        NS_LOGE("[NS] connect failed to %s:%u (https=%d)",
+                r.host.c_str(), (unsigned)r.port, (int)r.https);
+        r.httpCode = -1;      // отрицательный код = "сетевой/host фатал"
+        _hostError = true;    // дальше новые запросы не стартуем
+        r.ph = Phase::Error;
+        break;
+      }
       r.ph = Phase::Send;
       return false;
     }
@@ -245,8 +253,8 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
       if (r.kind == ReqKind::Entries) {
         _stage.httpEntries = code;
         _stage.okEntries = (ok && !doc.isNull() && doc.size() > 0) ? parseEntries(r.body, _stage, doc) : false;
-        
-          updateZoneCache(_stage);
+
+        updateZoneCache(_stage);
 
         _stageHasEntries = _stage.okEntries;
         _entriesDone = true;
@@ -311,9 +319,15 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
 bool NightscoutClient::tick(NightscoutData& out) {
   if (WiFi.status() != WL_CONNECTED) return false;
 
+  // <<< Если уже знаем, что host мёртв, и FSM в Idle — просто ничего не делаем
+  if (_hostError && _r.ph == Phase::Idle) {
+    _wantUpdate = false;   // игнорируем будущие requestUpdate до нового begin()
+    return false;
+  }
+
   // Старт цикла
   if (_r.ph == Phase::Idle) {
-    if (_wantUpdate) {
+    if (_wantUpdate && !_hostError) {   // <<< не стартуем новые запросы при hostError
       _wantUpdate = false;
 
       _entriesDone = false;
@@ -322,8 +336,8 @@ bool NightscoutClient::tick(NightscoutData& out) {
 
       resetStageFrom(out);
 
-      _stage.httpEntries = 0; _stage.okEntries = false;
-      _stage.httpProps   = 0; _stage.okProps   = false;
+      _stage.httpEntries   = 0; _stage.okEntries   = false;
+      _stage.httpProps     = 0; _stage.okProps     = false;
       _stage.httpDevStatus = 0; _stage.okDevStatus = false;
 
       String base = buildBase(_cfg.baseUrl);
@@ -342,7 +356,7 @@ bool NightscoutClient::tick(NightscoutData& out) {
   bool finished = stepReq(out);
 
   // цепочка запросов: entries -> props -> devstatus
-  if (finished && _r.ph == Phase::Idle) {
+  if (finished && _r.ph == Phase::Idle && !_hostError) { // <<< не продолжаем цепочку если hostError
     String base = buildBase(_cfg.baseUrl);
 
     if (_entriesDone && !_propsDone) {
@@ -366,12 +380,12 @@ bool NightscoutClient::tick(NightscoutData& out) {
   if (_devDone) {
     bool changed = false;
 
-    if (out.okDevStatus != _stage.okDevStatus) changed = true;
+    if (out.okDevStatus   != _stage.okDevStatus)   changed = true;
     if (out.httpDevStatus != _stage.httpDevStatus) changed = true;
-    if (out.pumpBatValid != _stage.pumpBatValid) changed = true;
-    if (out.pumpBatPct != _stage.pumpBatPct) changed = true;
+    if (out.pumpBatValid  != _stage.pumpBatValid)  changed = true;
+    if (out.pumpBatPct    != _stage.pumpBatPct)    changed = true;
     if (fabs(out.pumpBatV - _stage.pumpBatV) > 0.001f) changed = true;
-    if (out.pumpTime != _stage.pumpTime) changed = true;
+    if (out.pumpTime      != _stage.pumpTime)      changed = true;
 
     out.okDevStatus   = _stage.okDevStatus;
     out.httpDevStatus = _stage.httpDevStatus;
@@ -387,7 +401,7 @@ bool NightscoutClient::tick(NightscoutData& out) {
 }
 
 // -------------------- JSON parse --------------------
-
+// (ниже всё без изменений)
 bool NightscoutClient::parseEntries(const String& json, NightscoutData& out,
                                     ArduinoJson::DynamicJsonDocument& doc) const {
   JsonArray arr = doc.as<JsonArray>();
@@ -513,7 +527,6 @@ bool NightscoutClient::parseDevStatus(const String& json, NightscoutData& out,
     return true;
   }
 
-  // Вариант A: count=1, поэтому берём первый объект
   JsonObject o = arr[0].as<JsonObject>();
   int pct; float volt;
   bool ok = readPumpBattery(o, pct, volt);

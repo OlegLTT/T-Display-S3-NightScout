@@ -24,6 +24,9 @@ struct AppSettings {
   // например: "jxxxxxxx.nightscout-jino.ru" или "https://...."
   char hostSite[96] = {0};
 
+  // пройден ли экран приветствия (онбординг)
+  bool onboardingDone = false;
+
   bool isValidBounds() const {
     return sgvBounds[0] < sgvBounds[1] &&
            sgvBounds[1] < sgvBounds[2] &&
@@ -32,6 +35,8 @@ struct AppSettings {
 
     // последний экран UI: 0=Main, 1=Clock (экран логов НЕ сохраняем)
   uint8_t lastUiScreen = 0;
+
+  uint8_t brightness = 100; // яркость в процентах (1..100)
 
 };
 
@@ -42,6 +47,8 @@ public:
 
   bool load(AppSettings& out);
   bool save(const AppSettings& s);
+
+  bool factoryReset(AppSettings& out);
 
 private:
   Preferences _prefs;

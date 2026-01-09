@@ -162,6 +162,21 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     padding:0;
   }
 
+  .linkBtn{
+    border:none;
+    background:none;
+    padding:0;
+    margin:0;
+    color:#666;
+    font-size:12px;
+    text-decoration:underline;
+    cursor:pointer;
+  }
+  .linkBtn:hover{
+    color:#333;
+  }
+
+
   /* ---- Actions ---- */
   .actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   .btn{
@@ -268,6 +283,15 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       Оба варианта перезагружают устройство. Если вкладка не закрылась сама — просто закройте вручную.
     </div>
   </div>
+
+  <div class="card" style="padding:8px 14px;">
+    <div class="muted" style="font-size:12px; text-align:center;">
+      <button id="factoryBtn" class="linkBtn" type="button">
+        Сброс устройства…
+      </button>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -630,6 +654,29 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 
   function tryClosePage(){ window.close(); }
 
+  const factoryBtn = document.getElementById('factoryBtn');
+    if (factoryBtn) {
+      factoryBtn.addEventListener('click', () => {
+        const ok = confirm(
+          'Сбросить ВСЕ настройки устройства (Wi-Fi, Nightscout, границы, часовой пояс)?\n\n' +
+          'Устройство выполнит фабричный сброс и перезагрузится.'
+        );
+        if (!ok) return;
+
+        postSimple('/factory_reset')
+          .then(() => {
+            msgEl.textContent = 'Фабричный сброс выполнен. Перезагрузка…';
+            msgEl.className = 'msg ok';
+            setTimeout(tryClosePage, 300);
+          })
+          .catch(e => {
+            msgEl.textContent = e.message;
+            msgEl.className = 'msg err';
+          });
+      });
+    }
+
+
   document.getElementById('saveExitBtn').addEventListener('click', ()=>{
     saveOnly()
       .then(()=>postSimple('/reboot'))
@@ -713,8 +760,8 @@ static String escJson(const String& s) {
 }
 
 void CaptivePortal::logI(const String& s) {
+  // Информационные сообщения только в Serial, без попадания в экран логов
   Serial.println(s);
-  if (_logs) _logs->add(LogLevel::Info, s);
 }
 void CaptivePortal::logE(const String& s) {
   Serial.println(s);
@@ -915,6 +962,26 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
     _srv.send(302, "text/plain; charset=utf-8", "Redirect");
   });
 
+  _srv.on("/factory_reset", HTTP_POST, [this, logReq, noCache] {
+    logReq();
+    noCache();
+
+    if (!_store || !_settings) {
+      _srv.send(500, "text/plain; charset=utf-8", "no store/settings");
+      return;
+    }
+
+    // Полный сброс настроек
+    if (_store->factoryReset(*_settings)) {
+      _srv.send(200, "text/plain; charset=utf-8", "OK");
+      delay(150);
+      ESP.restart();
+    } else {
+      _srv.send(500, "text/plain; charset=utf-8", "factory reset failed");
+    }
+  });
+
+
   _srv.begin();
   _active = true;
 
@@ -1036,6 +1103,9 @@ void CaptivePortal::handleSave() {
     _srv.send(400, "text/plain; charset=utf-8", "bounds must be strictly increasing");
     return;
   }
+
+  // пользователь явно сохранил настройки из портала — считаем онбординг пройденным
+  s.onboardingDone = true;
 
   if (_store->save(s)) {
     *_settings = s;

@@ -9,4 +9,5 @@ void drawMainScreen(TFT_eSprite& sprite, const NightscoutData& ns);
 void drawClockScreen(TFT_eSprite& sprite, const NightscoutData& ns);
 void drawLogScreen(TFT_eSprite& sprite, const LogBuffer& logs);
 void drawPortalHelpScreen(TFT_eSprite& sprite, const CaptivePortal& portal);
+void drawFirstScreen(TFT_eSprite& sprite);
 

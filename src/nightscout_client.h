@@ -1,4 +1,3 @@
-// ===== nightscout_client.h =====
 #pragma once
 #include <Arduino.h>
 #include <WiFi.h>
@@ -127,6 +126,9 @@ private:
   bool _stageHasEntries = false;
   bool _stageHasProps   = false;
   bool _committedThisCycle = false;
+
+  // ← НОВОЕ: фатальная ошибка host/коннекта (DNS / SSL и т.п.)
+  bool _hostError = false;
 
   void resetStageFrom(const NightscoutData& cur) {
     _stage = cur;

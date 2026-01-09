@@ -90,3 +90,30 @@ void Backlight::next() {
   Serial.printf("Brightness step: %u%%\n", p);
   setPercent(p);
 }
+
+void Backlight::restoreFromPercent(uint8_t percent) {
+  // Если уровни не заданы — просто выставляем процент как есть
+  if (!_levels || _count == 0) {
+    setPercent(percent);
+    return;
+  }
+
+  if (percent < 1)   percent = 1;
+  if (percent > 100) percent = 100;
+
+  // Подбираем ближайший уровень в _levels к заданному percent
+  size_t bestIdx = 0;
+  uint8_t bestDiff = 255;
+
+  for (size_t i = 0; i < _count; ++i) {
+    uint8_t lvl = _levels[i];
+    uint8_t diff = (lvl > percent) ? (lvl - percent) : (percent - lvl);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestIdx = i;
+    }
+  }
+
+  _idx = bestIdx;
+  setPercent(_levels[_idx]); // это уже учтёт 100% через backlightForceMax()
+}

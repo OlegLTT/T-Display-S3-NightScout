@@ -25,6 +25,8 @@ public:
   static uint8_t currentPercentStatic();  // currentPercent() через зарегистрированный экземпляр
   static void setPercentStatic(uint8_t p);
 
+  void restoreFromPercent(uint8_t percent);  // подобрать ближайший уровень и выставить
+
 private:
   void backlightInit();
   void backlightForceMax();
