@@ -1,10 +1,14 @@
 #include <Arduino.h>
+#include "board_config.h"
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <time.h>
 #include "settings.h"
 #include "captive_portal.h"
 #include "time_utils.h"
+
+#include <lvgl.h>
+#include "gfx/lv_port.h"
 
 #include "nightscout_client.h"
 #include "screens.h"
@@ -13,6 +17,14 @@
 #include "overlay.h"
 #include "logs.h"
 #include "wifi_manager.h"
+
+#include <Wire.h>
+
+#if defined(BOARD_ESP32S3_DEV)
+  #include "lvgl.h"
+  #include "lcd_bsp.h"
+  #include "FT3168.h"
+#endif
 
 // == settings ====
 static SettingsStore settingsStore;
@@ -194,7 +206,7 @@ static void initWifi() {
   bool wifiOk = wifiMgr.begin();
 
   // ВСЕГДА стартуем с логов
-  currentScreen = 2;
+  currentScreen = SCREEN_LOGS;
   needUpdateScreen = true;
 
   // Ждём Nightscout только если Wi-Fi реально поднялся
@@ -217,8 +229,66 @@ static void initWifi() {
   ns.requestUpdate();
 }
 
+// void scanI2C() {
+//   // По этой плате:
+//   // 0x38 — это тач-контроллер (FT3168 / FT6xxx)
+//   // 0x51 — это RTC PCF85063
+//   // 0x6B — это IMU QMI8658
+//   // 0x7E — обычно артефакт/служебный адрес на этой общей шине, его можно просто игнорировать
+//   Serial.println("I2C scan...");
+//   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+
+//   for (uint8_t addr = 1; addr < 127; addr++) {
+//     Wire.beginTransmission(addr);
+//     if (Wire.endTransmission() == 0) {
+//       Serial.print("I2C device at 0x");
+//       Serial.println(addr, HEX);
+//       delay(5);
+//     }
+//   }
+// }
+
 void setup() {
   Serial.begin(115200);
+
+#if defined(BOARD_TDISPLAY_S3)
+  delay(5000);
+  Serial.println();
+  Serial.println("Booting LVGL on T-Display S3");
+
+  lv_port_init();
+
+
+  // Простейший UI: label по центру
+  lv_obj_t* label = lv_label_create(lv_scr_act());
+  lv_label_set_text(label, "Hello LVGL!");
+  lv_obj_center(label);
+  return;
+#else if defined(BOARD_ESP32S3_DEV)
+  delay(2000);
+  Serial.println("Hello from ESP32-S3 1.43 AMOLED");
+  
+  pinMode(PIN_BACKLIGHT, OUTPUT);
+  digitalWrite(PIN_BACKLIGHT, HIGH);
+
+  pinMode(PIN_TFT_RST, OUTPUT);
+  digitalWrite(PIN_TFT_RST, LOW);
+  delay(20);
+  digitalWrite(PIN_TFT_RST, HIGH);
+  delay(20);
+
+  scanI2C();
+
+  Serial.println();
+  Serial.print("Boot on board: ");
+  Serial.println(BOARD_NAME);
+
+  Serial.println("Init touch + LCD (LVGL demo)...");
+  Touch_Init();        // из FT3168.cpp
+  lcd_lvgl_Init();     // из lcd_bsp.c — ровно как в 07_LVGL_Test.ino
+  Serial.println("Init done.");
+  return;
+#endif
 
   // === Settings ===
   settingsStore.begin();
@@ -437,5 +507,5 @@ void loop() {
   tickTimeResync();
 
   yield(); // для WiFi/RTOS
-  }
+}
 

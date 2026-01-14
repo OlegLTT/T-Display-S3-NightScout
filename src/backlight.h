@@ -1,8 +1,9 @@
 #pragma once
 #include <Arduino.h>
+#include "board_config.h"
 
 struct BacklightConfig {
-  int pin = 38;
+  int pin = PIN_BACKLIGHT;
   int channel = 7;
   int freq = 12000;
   int resBits = 10;

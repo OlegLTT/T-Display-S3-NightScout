@@ -508,8 +508,8 @@ void drawLogScreen(TFT_eSprite& sprite, const LogBuffer& logs) {
   const uint16_t bg = TFT_BLACK;
   sprite.fillSprite(bg);
 
-  sprite.unloadFont();   // как у тебя было
-  sprite.setTextFont(1);
+  sprite.unloadFont();   
+  sprite.setTextFont(2);
   sprite.setTextSize(1);
   sprite.setTextDatum(TL_DATUM);
 
