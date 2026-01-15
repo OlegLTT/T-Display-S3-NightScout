@@ -2,6 +2,8 @@
 
 #include <lvgl.h>
 
+//LV_FONT_DECLARE(lv_font_montserrat_36);
+
 // создать главное окно и все виджеты
 void ui_main_create();
 

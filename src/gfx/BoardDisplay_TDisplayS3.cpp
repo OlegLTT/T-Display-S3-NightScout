@@ -1,10 +1,10 @@
-#include "display.h"
+#include "BoardDisplay_TDisplayS3.h"
 #include <Arduino.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 //#include <esp_lcd_i80_bus.h>
 
-// ====== PINOUT (твоя T-Display S3 i80 8-bit) ======
+// ====== PINOUT (T-Display S3 i80 8-bit) ======
 #define PIN_TFT_WR    8
 #define PIN_TFT_RD    9
 #define PIN_TFT_RS    7
@@ -23,18 +23,18 @@
 #define PIN_BACKLIGHT 38
 // ================================================
 
-// У тебя может быть 170x320 или уже повернуто 320x170.
+// может быть 170x320 или уже повернуто 320x170.
 // С учётом swap_xy(true) в референсе — обычно LVGL удобнее 320x170.
 static constexpr uint16_t LCD_W = 320;
 static constexpr uint16_t LCD_H = 170;
 
-namespace hardware {
+namespace gfx {
 
-display display::s_instance;
+BoardDisplay_TDisplayS3  BoardDisplay_TDisplayS3 ::s_instance;
 
-display& display::get() { return s_instance; }
+BoardDisplay_TDisplayS3& BoardDisplay_TDisplayS3::instance() { return s_instance;}
 
-display::display() {
+BoardDisplay_TDisplayS3 ::BoardDisplay_TDisplayS3 () {
     // RD держим HIGH (если не читаем)
     pinMode(PIN_TFT_RD, OUTPUT);
     digitalWrite(PIN_TFT_RD, HIGH);
@@ -59,7 +59,7 @@ display::display() {
 
     // transfer done callback -> прокидываем наружу
     auto on_transfer_done = [](esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*, void* user_ctx) -> bool {
-        auto d = static_cast<display*>(user_ctx);
+        auto d = static_cast<BoardDisplay_TDisplayS3 *>(user_ctx);
         if (d->m_on_transfer_done_callback) {
             d->m_on_transfer_done_callback(d->m_on_transfer_done_user_data);
         }
@@ -102,23 +102,22 @@ display::display() {
     set_backlight(brightness_level::max);
 }
 
-display::~display() {}
+BoardDisplay_TDisplayS3 ::~BoardDisplay_TDisplayS3 () {}
 
-uint16_t display::width() const  { return LCD_W; }
-uint16_t display::height() const { return LCD_H; }
+uint16_t BoardDisplay_TDisplayS3 ::width() const  { return LCD_W; }
+uint16_t BoardDisplay_TDisplayS3 ::height() const { return LCD_H; }
 
-void display::set_backlight(brightness_level level) {
+void BoardDisplay_TDisplayS3 ::set_backlight(brightness_level level) {
     analogWrite(PIN_BACKLIGHT, static_cast<int>(level));
 }
 
-void display::set_transfer_done_callback(transfer_done_callback_t cb, void* user_data) {
+void BoardDisplay_TDisplayS3 ::set_transfer_done_callback(transfer_done_callback_t cb, void* user_data) {
     m_on_transfer_done_callback = cb;
     m_on_transfer_done_user_data = user_data;
 }
 
-void display::set_bitmap(uint16_t x1, uint16_t x2, uint16_t y1, uint16_t y2, uint16_t* data) {
-    // esp_lcd: x2,y2 — exclusive, поэтому +1
+void BoardDisplay_TDisplayS3::draw_bitmap(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t* data) {
     esp_lcd_panel_draw_bitmap(m_panel_handle, x1, y1, x2 + 1, y2 + 1, data);
 }
 
-} // namespace hardware
+} // namespace gfx
