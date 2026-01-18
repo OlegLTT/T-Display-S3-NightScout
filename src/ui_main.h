@@ -5,7 +5,7 @@
 //LV_FONT_DECLARE(lv_font_montserrat_36);
 
 // создать главное окно и все виджеты
-void ui_main_create();
+lv_obj_t* ui_main_create();
 
 // обновление времени (строка вида "12:34")
 void ui_main_set_time(const char* text);
