@@ -1,4 +1,5 @@
 #include "settings.h"
+#include <nvs_flash.h>
 
 static void writeStr(Preferences& p, const char* key, const char* s, size_t maxLen) {
   if (!s) s = "";
@@ -13,9 +14,23 @@ static void readStr(Preferences& p, const char* key, char* out, size_t maxLen, c
   strlcpy(out, v.c_str(), maxLen);
 }
 
+// bool SettingsStore::begin() {
+//   return _prefs.begin("appcfg", false); // RW
+// }
+
 bool SettingsStore::begin() {
-  return _prefs.begin("appcfg", false); // RW
+  esp_err_t err = nvs_flash_init();
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    // NVS битый/несовместим — стираем и инициализируем заново
+    nvs_flash_erase();
+    err = nvs_flash_init();
+  }
+  if (err != ESP_OK) {
+    return false;
+  }
+  return _prefs.begin("appcfg", false);
 }
+
 void SettingsStore::end() {
   _prefs.end();
 }
@@ -113,6 +128,8 @@ bool SettingsStore::factoryReset(AppSettings& out) {
   out.sgvBounds[1] = 4.5f;
   out.sgvBounds[2] = 9.f;
   out.sgvBounds[3] = 11.f;
+
+  out.onboardingDone = false;
 
   // сохраняем дефолтные настройки в NVS, чтобы всё было консистентно
   return save(out);

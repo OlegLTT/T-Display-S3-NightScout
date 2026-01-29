@@ -1,23 +1,12 @@
 #pragma once
-
 #include <lvgl.h>
+#include "nightscout_client.h"
 
-//LV_FONT_DECLARE(lv_font_montserrat_36);
-
-// создать главное окно и все виджеты
+// Экран MAIN
 lv_obj_t* ui_main_create();
 
-// обновление времени (строка вида "12:34")
-void ui_main_set_time(const char* text);
+// "Как старый drawMainScreen(sprite, nsData)" — полный апдейт виджетов
+void main_update_full(const NightscoutData& ns);
 
-// обновление BG (строка вида "5.6" или "102")
-void ui_main_set_bg(const char* text);
-
-// обновление тренда (стрелка, можно текстом "↗", "→", "↘" и т.п.)
-void ui_main_set_trend(const char* text);
-
-// обновление "дельты" или дополнительной строки (например "+0.3 / 15 мин")
-void ui_main_set_delta(const char* text);
-
-// обновление строки статуса (Wi-Fi, источник данных и т.п.)
-void ui_main_set_status(const char* text);
+// // (опционально) доступ к экрану, если нужно переключать
+// lv_obj_t* ui_main_screen();

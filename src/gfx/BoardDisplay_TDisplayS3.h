@@ -9,8 +9,8 @@ public:
     using transfer_done_callback_t = void (*)(void*);
     enum class brightness_level : uint8_t { min = 0, max = 255 };
 
-    static BoardDisplay_TDisplayS3& instance();     // <-- ВОТ ТУТ
-    static BoardDisplay_TDisplayS3& get() { return instance(); } // совместимость
+    static BoardDisplay_TDisplayS3& instance();   
+   // static BoardDisplay_TDisplayS3& get() { return instance(); } // совместимость
 
     uint16_t width()  const;
     uint16_t height() const;

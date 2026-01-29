@@ -1,25 +1,17 @@
+// ======================= nightscout_client.cpp =======================
 #include "nightscout_client.h"
-#include "sgv_zone.h"
+
+using su::SH;
 
 // -------------------- Public API --------------------
 
 void NightscoutClient::begin(const NSConfig& cfg) {
   _cfg = cfg;
-  _hostError = false;      // <<< при новом конфиге считаем, что всё ок
+  _hostError = false;
 }
 
 void NightscoutClient::requestUpdate() {
   _wantUpdate = true;
-}
-
-static inline void updateZoneCache(NightscoutData& ns) {
-  if (ns.okEntries && !isnan(ns.sgv_mmol)) {
-    ns.zoneColor = colorBySgvBounds(ns.sgv_mmol);
-    ns.zoneValid = true;
-  } else {
-    ns.zoneColor = TFT_DARKGREY;
-    ns.zoneValid = false;
-  }
 }
 
 // -------------------- Helpers --------------------
@@ -35,53 +27,24 @@ String NightscoutClient::buildBase(String url) const {
   return url;
 }
 
-String NightscoutClient::makeEntriesPath(const String& base) const {
-  return base + "/api/v1/entries.json?count=10";
-}
-
 String NightscoutClient::makePropsPath(const String& base) const {
-  return base + "/api/v2/properties/iob,cob,delta,openaps,basal";
-}
-
-String NightscoutClient::makeDevStatusPath(const String& base) const {
-  String u = base +
-    "/api/v1/devicestatus.json?"
-    "find%5Buploader.battery%5D%5B%24exists%5D=true"
-    "&count=1";
-  return u;
+  return base + "/api/v2/properties/bgnow,direction,delta,iob,cob,pump";
 }
 
 void NightscoutClient::sanitizeJson(String& s) const {
+  // чистим управляющие символы
   for (int i = 0; i < (int)s.length(); i++) {
     if ((uint8_t)s[i] < 32) s.setCharAt(i, ' ');
   }
   s.replace("\\u0000", " ");
   s.replace("\\u000b", " ");
-  s.replace("\\u0032", " ");
-
-  int ndx = 0;
-  int sr = s.indexOf("\"date\":", ndx);
-  while (sr != -1) {
-    ndx = sr + 1;
-    if (sr + 20 < (int)s.length()) {
-      if (s.charAt(sr + 20) == '.') {
-        s.remove(sr + 20, 1);
-        while (sr + 20 < (int)s.length()) {
-          char c = s.charAt(sr + 20);
-          if (c >= '0' && c <= '9') s.remove(sr + 20, 1);
-          else break;
-        }
-      }
-    }
-    sr = s.indexOf("\"date\":", ndx);
-  }
 }
 
 bool NightscoutClient::splitUrl(const String& fullUrl, bool& https, String& host,
                                 uint16_t& port, String& path) const {
   https = false; host = ""; port = 0; path = "/";
-  String u = fullUrl;
 
+  String u = fullUrl;
   if (u.startsWith("https://")) { https = true;  u.remove(0, 8); port = 443; }
   else if (u.startsWith("http://")) { https = false; u.remove(0, 7); port = 80; }
   else return false;
@@ -104,19 +67,13 @@ bool NightscoutClient::splitUrl(const String& fullUrl, bool& https, String& host
 
 // -------------------- FSM core --------------------
 
-void NightscoutClient::startReq(ReqKind k, const String& base) {
+void NightscoutClient::startReq(const String& base) {
   _r = Req{};
-  _r.kind = k;
   _r.ph = Phase::Connect;
   _r.tStart = millis();
   _r.tLastIO = _r.tStart;
 
-  String full;
-  if (k == ReqKind::Entries)        full = makeEntriesPath(base);
-  else if (k == ReqKind::Props)     full = makePropsPath(base);
-  else if (k == ReqKind::DevStatus) full = makeDevStatusPath(base);
-  else full = "";
-
+  String full = makePropsPath(base);
   if (!splitUrl(full, _r.https, _r.host, _r.port, _r.path)) {
     _r.ph = Phase::Error;
     return;
@@ -124,7 +81,7 @@ void NightscoutClient::startReq(ReqKind k, const String& base) {
 
   if (_r.https && _cfg.tlsInsecure) _r.cs.setInsecure();
 
-  NS_LOGI("[NS] startReq kind=%d path='%s'", (int)k, _r.path.c_str());
+  NS_LOGI("[NS] startReq GET %s", _r.path.c_str());
 }
 
 void NightscoutClient::abortReq() {
@@ -132,7 +89,6 @@ void NightscoutClient::abortReq() {
   else _r.cp.stop();
 
   _r.ph = Phase::Idle;
-  _r.kind = ReqKind::None;
 }
 
 bool NightscoutClient::stepReq(NightscoutData& out) {
@@ -140,7 +96,7 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
   const uint32_t now = millis();
 
   if (r.ph != Phase::Idle && (now - r.tLastIO) > _cfg.httpTimeoutMs) {
-    NS_LOGE("[NS] timeout in phase=%d kind=%d", (int)r.ph, (int)r.kind);
+    NS_LOGE("[NS] timeout phase=%d", (int)r.ph);
     r.ph = Phase::Error;
   }
 
@@ -148,22 +104,22 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
 
   switch (r.ph) {
     case Phase::Connect: {
+      NS_LOGI("[NS] Connect %s:%u https=%d", r.host.c_str(), (unsigned)r.port, (int)r.https);
       bool ok = c->connect(r.host.c_str(), r.port);
       r.tLastIO = now;
       if (!ok) {
-        // <<< КЛЮЧЕВОЕ МЕСТО: коннект не удался — считаем host фатально битым
-        NS_LOGE("[NS] connect failed to %s:%u (https=%d)",
-                r.host.c_str(), (unsigned)r.port, (int)r.https);
-        r.httpCode = -1;      // отрицательный код = "сетевой/host фатал"
-        _hostError = true;    // дальше новые запросы не стартуем
+        NS_LOGE("[NS] connect failed");
+        r.httpCode = -1;
+        _hostError = true;
         r.ph = Phase::Error;
-        break;
+        return false;
       }
       r.ph = Phase::Send;
       return false;
     }
 
     case Phase::Send: {
+      NS_LOGI("[NS] Send request");
       String req =
         String("GET ") + r.path + " HTTP/1.1\r\n" +
         "Host: " + r.host + "\r\n" +
@@ -189,6 +145,8 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
 
           line.trim();
           if (line.isEmpty()) {
+            NS_LOGI("[NS] Headers done (http=%d len=%d chunked=%d)",
+                    r.httpCode, r.contentLen, (int)r.chunked);
             r.ph = Phase::ReadBody;
             break;
           }
@@ -200,7 +158,6 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
 
           String lower = line;
           lower.toLowerCase();
-
           if (lower.startsWith("content-length:")) {
             r.contentLen = lower.substring(String("content-length:").length()).toInt();
           } else if (lower.startsWith("transfer-encoding:") && lower.indexOf("chunked") >= 0) {
@@ -230,53 +187,32 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
       }
 
       if (!c->connected() && !c->available()) {
+        NS_LOGI("[NS] Body done (len=%u)", (unsigned)r.body.length());
         r.ph = Phase::Done;
       }
       return false;
     }
 
     case Phase::Done: {
-      const int code = r.httpCode;
-      const bool ok = (code == 200);
+      // всегда прокидываем bounds на экраны
+      memcpy(out.sgvBounds, _cfg.sgvBounds, sizeof(out.sgvBounds));
 
-      ArduinoJson::DynamicJsonDocument doc(16384);
+      out.http = r.httpCode;
+      out.ok = false;
 
-      if (ok) {
-        sanitizeJson(r.body);
-        DeserializationError e = deserializeJson(doc, r.body);
-        if (e) {
-          NS_LOGE("[NS] JSON parse failed kind=%d: %s", (int)r.kind, e.c_str());
-          doc.clear();
-        }
+      if (r.httpCode != 200) {
+        NS_LOGE("[NS] HTTP %d (len=%u)", r.httpCode, (unsigned)r.body.length());
+        abortReq();
+        return true;
       }
 
-      if (r.kind == ReqKind::Entries) {
-        _stage.httpEntries = code;
-        _stage.okEntries = (ok && !doc.isNull() && doc.size() > 0) ? parseEntries(r.body, _stage, doc) : false;
+      sanitizeJson(r.body);
 
-        updateZoneCache(_stage);
-
-        _stageHasEntries = _stage.okEntries;
-        _entriesDone = true;
-      }
-      else if (r.kind == ReqKind::Props) {
-        _stage.httpProps = code;
-        _stage.okProps = (ok && !doc.isNull() && doc.size() > 0) ? parseProps(r.body, _stage, doc) : false;
-        _stageHasProps = _stage.okProps;
-        _propsDone = true;
-      }
-      else if (r.kind == ReqKind::DevStatus) {
-        _stage.httpDevStatus = code;
-        _stage.okDevStatus = ok;
-        if (ok && !doc.isNull() && doc.size() > 0) {
-          parseDevStatus(r.body, _stage, doc);
-        } else {
-          _stage.pumpBatValid = false;
-        }
-        _devDone = true;
-
-        NS_LOGI("[NS] devstatus done http=%d len=%u valid=%d pct=%d",
-                code, (unsigned)r.body.length(), _stage.pumpBatValid, _stage.pumpBatPct);
+      NS_LOGI("[NS] Parse v2/properties via GSON...");
+      if (!parseV2Properties(r.body, out)) {
+        out.ok = false;
+      } else {
+        out.ok = true;
       }
 
       abortReq();
@@ -284,28 +220,9 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
     }
 
     case Phase::Error: {
-      const int code = (r.httpCode ? r.httpCode : -1);
-
-      if (r.kind == ReqKind::Entries) {
-        _stage.httpEntries = code;
-        _stage.okEntries = false;
-        _stageHasEntries = false;
-        _entriesDone = true;
-      } else if (r.kind == ReqKind::Props) {
-        _stage.httpProps = code;
-        _stage.okProps = false;
-        _stageHasProps = false;
-        _propsDone = true;
-      } else if (r.kind == ReqKind::DevStatus) {
-        _stage.httpDevStatus = code;
-        _stage.okDevStatus = false;
-        _stage.pumpBatValid = false;
-        _devDone = true;
-
-        NS_LOGE("[NS] devstatus ERROR http=%d bodyLen=%u",
-                code, (unsigned)r.body.length());
-      }
-
+      memcpy(out.sgvBounds, _cfg.sgvBounds, sizeof(out.sgvBounds));
+      out.http = (r.httpCode ? r.httpCode : -1);
+      out.ok = false;
       abortReq();
       return true;
     }
@@ -314,240 +231,158 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
     default:
       return false;
   }
+   return false;
 }
 
 bool NightscoutClient::tick(NightscoutData& out) {
   if (WiFi.status() != WL_CONNECTED) return false;
 
-  // <<< Если уже знаем, что host мёртв, и FSM в Idle — просто ничего не делаем
+  // если хост уже “фатально” не коннектится — не спамим сеть
   if (_hostError && _r.ph == Phase::Idle) {
-    _wantUpdate = false;   // игнорируем будущие requestUpdate до нового begin()
+    _wantUpdate = false;
     return false;
   }
 
-  // Старт цикла
+  // старт запроса
   if (_r.ph == Phase::Idle) {
-    if (_wantUpdate && !_hostError) {   // <<< не стартуем новые запросы при hostError
+    if (_wantUpdate && !_hostError) {
       _wantUpdate = false;
-
-      _entriesDone = false;
-      _propsDone   = false;
-      _devDone     = false;
-
-      resetStageFrom(out);
-
-      _stage.httpEntries   = 0; _stage.okEntries   = false;
-      _stage.httpProps     = 0; _stage.okProps     = false;
-      _stage.httpDevStatus = 0; _stage.okDevStatus = false;
 
       String base = buildBase(_cfg.baseUrl);
       if (base.isEmpty()) {
         NS_LOGE("[NS] baseUrl empty");
+        out.ok = false;
+        out.http = 0;
+        memcpy(out.sgvBounds, _cfg.sgvBounds, sizeof(out.sgvBounds));
         return true;
       }
 
-      startReq(ReqKind::Entries, base);
+      startReq(base);
       return false;
     }
     return false;
   }
 
   // шаг FSM
-  bool finished = stepReq(out);
-
-  // цепочка запросов: entries -> props -> devstatus
-  if (finished && _r.ph == Phase::Idle && !_hostError) { // <<< не продолжаем цепочку если hostError
-    String base = buildBase(_cfg.baseUrl);
-
-    if (_entriesDone && !_propsDone) {
-      if (!base.isEmpty()) startReq(ReqKind::Props, base);
-      return false;
-    }
-    if (_propsDone && !_devDone) {
-      if (!base.isEmpty()) startReq(ReqKind::DevStatus, base);
-      return false;
-    }
-  }
-
-  // 1) синхронный коммит entries+props
-  if (_propsDone) {
-    if (commitIfReady(out)) {
-      return true;
-    }
-  }
-
-  // 2) devstatus коммитим НЕЗАВИСИМО (важно!)
-  if (_devDone) {
-    bool changed = false;
-
-    if (out.okDevStatus   != _stage.okDevStatus)   changed = true;
-    if (out.httpDevStatus != _stage.httpDevStatus) changed = true;
-    if (out.pumpBatValid  != _stage.pumpBatValid)  changed = true;
-    if (out.pumpBatPct    != _stage.pumpBatPct)    changed = true;
-    if (fabs(out.pumpBatV - _stage.pumpBatV) > 0.001f) changed = true;
-    if (out.pumpTime      != _stage.pumpTime)      changed = true;
-
-    out.okDevStatus   = _stage.okDevStatus;
-    out.httpDevStatus = _stage.httpDevStatus;
-    out.pumpBatValid  = _stage.pumpBatValid;
-    out.pumpBatPct    = _stage.pumpBatPct;
-    out.pumpBatV      = _stage.pumpBatV;
-    out.pumpTime      = _stage.pumpTime;
-
-    if (changed) return true;
-  }
-
-  return false;
+  return stepReq(out);
 }
 
-// -------------------- JSON parse --------------------
-// (ниже всё без изменений)
-bool NightscoutClient::parseEntries(const String& json, NightscoutData& out,
-                                    ArduinoJson::DynamicJsonDocument& doc) const {
-  JsonArray arr = doc.as<JsonArray>();
-  if (arr.isNull() || arr.size() == 0) {
-    NS_LOGE("[NS] entries empty");
+// -------------------- Parse (GyverGSON + hashKeys + su::SH) --------------------
+
+static bool entryToCstr(gson::Entry e, char* out, size_t outSz) {
+  if (!out || outSz == 0) return false;
+  out[0] = 0;
+  if (!e) return false;
+  e.toStr(out, outSz);
+  return out[0] != 0;
+}
+
+static float entryToFloatAny(gson::Entry e) {
+  if (!e) return NAN;
+
+  // если это число — можно напрямую
+  // (у Entry есть type(), но даже без него можно безопасно: number тоже toStr отдаст)
+  char buf[24];
+  if (!entryToCstr(e, buf, sizeof(buf))) return NAN;
+  return (float)atof(buf);
+}
+
+static int entryToIntAny(gson::Entry e, int def = 0) {
+  if (!e) return def;
+  return e.toInt32();
+}
+
+bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out) const {
+  gson::Parser p;
+
+  // теперь пакет маленький, но reserve всё равно ускоряет
+  p.reserve(250);
+
+  if (!p.parse(json) || p.hasError()) {
+    NS_LOGE("[NS] GSON parse error: %s at %d", p.readError(), p.errorIndex());
     return false;
   }
 
-  int sgvindex = 0;
-  JsonObject obj;
-  do {
-    obj = doc[sgvindex].as<JsonObject>();
-    sgvindex++;
-  } while (!obj.containsKey("sgv") && (sgvindex < (int)arr.size() - 1));
-  sgvindex--;
+  // хешируем ключи для ускорения доступа
+  p.hashKeys();
 
-  if (sgvindex < 0 || sgvindex >= (int)arr.size()) sgvindex = 0;
-
-  strlcpy(out.dev, doc[sgvindex]["device"] | "N/A", sizeof(out.dev));
-  strlcpy(out.dir, doc[sgvindex]["direction"] | "N/A", sizeof(out.dir));
-  if (strcmp(out.dir, "N/A") == 0) {
-    strlcpy(out.dir, doc[sgvindex]["trend"] | "N/A", sizeof(out.dir));
+  // ---- bgnow ----
+  gson::Entry bgnow = p.get(SH("bgnow"));
+  if (!bgnow) {
+    NS_LOGE("[NS] no 'bgnow'");
+    return false;
   }
 
-  out.rawtime_ms = doc[sgvindex]["date"].as<long long>();
-  out.sensTime   = (time_t)(out.rawtime_ms / 1000LL);
-
-  out.sgv_mgdl = doc[sgvindex]["sgv"] | 0.0f;
-  out.sgv_mmol = mgdlToMmol(out.sgv_mgdl);
-
-  int n = min(10, (int)arr.size());
-  for (int i = 0; i < n; i++) {
-    float v = doc[i]["sgv"] | 0.0f;
-    out.last10mmol[i] = mgdlToMmol(v);
+  gson::Entry sgvs = bgnow.get(SH("sgvs"));
+  if (!sgvs || sgvs.length() <= 0) {
+    NS_LOGE("[NS] no 'bgnow.sgvs'");
+    return false;
   }
-  for (int i = n; i < 10; i++) out.last10mmol[i] = 0;
 
-  NS_LOGI("[NS] entries OK dev='%s' dir='%s' sgv=%.1f mmol (%.0f mg/dL)",
-          out.dev, out.dir, out.sgv_mmol, out.sgv_mgdl);
+  gson::Entry sg0 = sgvs.get((int)0);
+  out.sgv_mmol = entryToFloatAny(sg0.get(SH("scaled")));
+  out.update_time_ms = (uint64_t)bgnow.get(SH("mills")).toInt64();
 
-  return true;
-}
+  // ---- direction.value ----
+  strlcpy(out.trend, "N/A", sizeof(out.trend));
+  gson::Entry direction = p.get(SH("direction"));
+  if (direction) {
+    char buf[24];
+    if (entryToCstr(direction.get(SH("value")), buf, sizeof(buf))) {
+      strlcpy(out.trend, buf, sizeof(out.trend));
+    }
+  }
 
-bool NightscoutClient::parseProps(const String& json, NightscoutData& out,
-                                  ArduinoJson::DynamicJsonDocument& doc) const {
-  JsonObject iob = doc["iob"];
-  out.iob = iob["iob"] | 0.0f;
+  // ---- delta.scaled ----
+  gson::Entry delta = p.get(SH("delta"));
+  out.delta_mmol = delta ? entryToFloatAny(delta.get(SH("scaled"))) : NAN;
 
-  JsonObject cob = doc["cob"];
-  out.cob = cob["cob"] | 0.0f;
+  // ---- iob.iob / cob.cob ----
+  gson::Entry iob = p.get(SH("iob"));
+  out.iob = iob ? entryToFloatAny(iob.get(SH("iob"))) : NAN;
 
-  JsonObject delta = doc["delta"];
-  out.delta_mgdl = delta["mgdl"] | 0;
-  out.delta_mmol = mgdlToMmol((float)out.delta_mgdl);
+  gson::Entry cob = p.get(SH("cob"));
+  out.cob = cob ? entryToFloatAny(cob.get(SH("cob"))) : NAN;
 
-  snprintf(out.delta_display, sizeof(out.delta_display), "%+.1f", out.delta_mmol);
+  // ---- pump battery ----
+  out.pumpBatPct = -1;
+  out.pumpBatV   = 0.0f;
 
-  JsonObject loop_obj;
-  JsonObject loop_display;
-  loop_obj = doc["openaps"];
-  loop_display = loop_obj["status"];
+  gson::Entry pump = p.get(SH("pump"));
+  if (pump) {
+    // voltage
+    gson::Entry pump_inner = pump.get(SH("pump"));
+    if (pump_inner) {
+      gson::Entry bat = pump_inner.get(SH("battery"));
+      if (bat) {
+        float v = entryToFloatAny(bat.get(SH("voltage")));
+        if (!isnan(v) && v > 0.0f) out.pumpBatV = v;
 
-  strlcpy(out.loop_code,  loop_display["code"]  | "N/A", sizeof(out.loop_code));
-  strlcpy(out.loop_label, loop_display["label"] | "N/A", sizeof(out.loop_label));
+        int pct = entryToIntAny(bat.get(SH("percent")), -1);
+        if (pct > 0 && pct <= 100) out.pumpBatPct = pct;  // у тебя часто 0
+      }
+    }
 
-  JsonObject basal = doc["basal"];
-  strlcpy(out.basal_display, basal["display"] | "N/A", sizeof(out.basal_display));
-
-  NS_LOGI("[NS] props OK iob=%.2f cob=%.0f delta=%s loop=%s basal=%s",
-          out.iob, out.cob, out.delta_display, out.loop_label, out.basal_display);
-
-  return true;
-}
-
-// --- devicestatus parse helpers ---
-static bool readPumpBattery(JsonObject o, int& pct, float& volt) {
-  pct = -1;
-  volt = 0.0f;
-
-  // 1) основной кейс: uploader.battery = %
-  if (o.containsKey("uploader")) {
-    JsonObject up = o["uploader"].as<JsonObject>();
-    if (!up.isNull() && up.containsKey("battery")) {
-      int b = up["battery"] | -1;
-      if (b >= 0 && b <= 100) {
-        pct = b;
-        return true;
+    // uploader battery (%)
+    if (out.pumpBatPct < 0) {
+      gson::Entry uploader = pump.get(SH("uploader"));
+      if (uploader) {
+        int up = entryToIntAny(uploader.get(SH("battery")), -1);
+        if (up >= 0 && up <= 100) out.pumpBatPct = up;
       }
     }
   }
 
-  // 2) fallback: pump.battery.percent / voltage
-  if (o.containsKey("pump")) {
-    JsonObject pump = o["pump"].as<JsonObject>();
-    if (!pump.isNull() && pump.containsKey("battery")) {
-      JsonVariant bat = pump["battery"];
+  NS_LOGI("[NS] parsed: sgv=%.1f mmol trend=%s delta=%.2f iob=%.2f cob=%.0f bat=%d%% V=%.2f t=%llu elems=%u bytes=%u",
+          out.sgv_mmol, out.trend, out.delta_mmol, out.iob, out.cob,
+          out.pumpBatPct, out.pumpBatV,
+          (unsigned long long)out.update_time_ms,
+          (unsigned)p.length(), (unsigned)p.size());
 
-      if (bat.is<JsonObject>()) {
-        JsonObject b = bat.as<JsonObject>();
-        if (b.containsKey("percent")) pct = b["percent"] | -1;
-        if (b.containsKey("voltage")) volt = b["voltage"] | 0.0f;
-      } else if (bat.is<int>()) {
-        pct = bat.as<int>();
-      } else if (bat.is<float>()) {
-        float v = bat.as<float>();
-        if (v <= 10.0f) volt = v;
-        else pct = (int)v;
-      }
-
-      if ((pct >= 0 && pct <= 100) || (volt > 0.0f)) return true;
-    }
+  // минимальная валидность
+  if (isnan(out.sgv_mmol) || out.update_time_ms == 0) {
+    NS_LOGW("[NS] parsed but missing sgv/time");
+    return false;
   }
-
-  return false;
-}
-
-bool NightscoutClient::parseDevStatus(const String& json, NightscoutData& out,
-                                      ArduinoJson::DynamicJsonDocument& doc) const {
-  JsonArray arr = doc.as<JsonArray>();
-  if (arr.isNull() || arr.size() == 0) {
-    NS_LOGW("[NS] devicestatus empty");
-    out.pumpBatValid = false;
-    return true;
-  }
-
-  JsonObject o = arr[0].as<JsonObject>();
-  int pct; float volt;
-  bool ok = readPumpBattery(o, pct, volt);
-
-  if (ok) {
-    out.pumpBatValid = true;
-    out.pumpBatPct = pct;
-    out.pumpBatV = volt;
-
-    long long mills = o["mills"] | 0LL;
-    out.pumpTime = (mills > 0) ? (time_t)(mills / 1000LL) : 0;
-
-    if (pct >= 0) NS_LOGI("[NS] pumpBat=%d%% (V=%.2f)", pct, volt);
-    else          NS_LOGI("[NS] pumpBat V=%.2f", volt);
-  } else {
-    out.pumpBatValid = false;
-    out.pumpBatPct = -1;
-    out.pumpBatV = 0.0f;
-    out.pumpTime = 0;
-    NS_LOGW("[NS] devicestatus: no uploader.battery/pump.battery in first record");
-  }
-
   return true;
 }

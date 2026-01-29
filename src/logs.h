@@ -8,15 +8,15 @@ enum class LogLevel : uint8_t { Info, Warn, Error };
 template <size_t CAP, size_t MSG_LEN>
 class LogBufferT {
 public:
+  static constexpr size_t kCap = CAP;
+  static constexpr size_t kMsgLen = MSG_LEN;
   struct Entry {
-    uint32_t ms;
     LogLevel level;
     char msg[MSG_LEN];
   };
 
   void add(LogLevel lvl, const char* s) {
     Entry& e = _buf[_head];
-    e.ms = millis();
     e.level = lvl;
     strlcpy(e.msg, s ? s : "", MSG_LEN);
     _head = (_head + 1) % CAP;
@@ -40,8 +40,7 @@ public:
   size_t count() const { return _count; }
 
   Entry getNewestFirst(size_t i) const {
-    // i=0 самый новый
-    if (i >= _count) return Entry{0, LogLevel::Info, ""};
+    if (i >= _count) return Entry{LogLevel::Info, ""};
     int idx = (int)_head - 1 - (int)i;
     while (idx < 0) idx += CAP;
     return _buf[idx];
@@ -60,7 +59,7 @@ private:
 
 // --- Backward compatibility layer ---
 // Если ваш основной буфер именно такой:
-using LogBuffer = LogBufferT<25, 96>;
+using LogBuffer = LogBufferT<11, 94>;
 
 // Чтобы старый код screens.cpp мог писать LogEntry e = ...
 using LogEntry = LogBuffer::Entry;

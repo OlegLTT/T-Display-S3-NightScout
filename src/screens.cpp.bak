@@ -535,9 +535,7 @@ void drawLogScreen(TFT_eSprite& sprite, const LogBuffer& logs) {
 
     // Собираем "секунды msg" в C-строку
     char msgBuf[128];
-    unsigned long sec = e.ms / 1000UL;
-    // "%lu " + msg
-    snprintf(msgBuf, sizeof(msgBuf), "%lu %s", sec, e.msg);
+    snprintf(msgBuf, sizeof(msgBuf), "%s", e.msg);
 
     int w = sprite.textWidth(msgBuf);
     int lines = (w <= 0) ? 1 : (w + screenW - 1) / screenW;
@@ -565,8 +563,7 @@ void drawLogScreen(TFT_eSprite& sprite, const LogBuffer& logs) {
     sprite.setTextColor(col, bg);
 
     char msgBuf[128];
-    unsigned long sec = e.ms / 1000UL;
-    snprintf(msgBuf, sizeof(msgBuf), "%lu %s", sec, e.msg);
+    snprintf(msgBuf, sizeof(msgBuf), "%s", e.msg);
 
     int used = drawWrappedLine(
       sprite,
