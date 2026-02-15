@@ -1,5 +1,7 @@
 // ui_main.cpp
 #include "ui_main.h"
+#include "ui_ns_view.h"
+#include "ui_ns_cache.h"
 #include "fonts.h"
 
 #include <lvgl.h>
@@ -8,6 +10,9 @@
 #include <cmath>
 #include <ctime>
 #include <cstddef>
+
+
+static NsUiCache g_cache;
 
 // ======================================================
 //                     LVGL handles
@@ -115,235 +120,67 @@ static void arrow_set_angle_deg_via_right(int32_t target_deg, uint32_t time_ms) 
     }
 }
 
-// ======================================================
-//                     Helpers
-// ======================================================
-static inline bool str_changed(const char* a, const char* b) {
-    if (!a && !b) return false;
-    if (!a || !b) return true;
-    return std::strcmp(a, b) != 0;
-}
-
-static void set_label_if_changed(lv_obj_t* lbl, const char* txt,
-                                 char* cache, size_t cache_sz) {
-    if (!lbl || !txt || !cache || cache_sz == 0) return;
-    if (std::strncmp(cache, txt, cache_sz) == 0) return;
-    std::strncpy(cache, txt, cache_sz);
-    cache[cache_sz - 1] = '\0';
-    lv_label_set_text(lbl, cache);
-}
-
-static void set_color_if_changed(lv_obj_t* obj, lv_color_t c, lv_color_t* cache) {
-    if (!obj || !cache) return;
-    if (std::memcmp(cache, &c, sizeof(lv_color_t)) == 0) return;
-    *cache = c;
-    lv_obj_set_style_text_color(obj, c, LV_PART_MAIN);
-}
-
-static lv_color_t battery_color_for_pct(int pct) {
-    if (pct < 0)   return lv_color_make(160,160,160);
-    if (pct <= 15) return lv_color_make(255, 0, 0);
-    if (pct <= 35) return lv_color_make(255, 120, 0);
-    return lv_color_make(100, 255, 0);
-}
-
-// \uF240-100% \uF241-75% \uF242-50% \uF243-25% \uF244-0%
-static const char* battery_icon_for_pct(int pct) {
-    if (pct < 0)   return "\uF242"; // нейтральная
-    if (pct >= 88) return "\uF240";
-    if (pct >= 63) return "\uF241";
-    if (pct >= 38) return "\uF242";
-    if (pct >= 13) return "\uF243";
-    return "\uF244";
-}
-
-// тренд -> угол + количество стрелок
-static void trend_to_angle_and_count(const char* trend, int& angle_deg, int& count) {
-    angle_deg = 0;
-    count = 1;
-    if (!trend || !trend[0]) return;
-
-    if (!std::strcmp(trend, "Flat")) { angle_deg = 0; count = 1; return; }
-
-    if (!std::strcmp(trend, "FortyFiveUp"))   { angle_deg = -45; count = 1; return; }
-    if (!std::strcmp(trend, "SingleUp"))      { angle_deg = -90; count = 1; return; }
-    if (!std::strcmp(trend, "DoubleUp"))      { angle_deg = -90; count = 2; return; }
-    if (!std::strcmp(trend, "TripleUp"))      { angle_deg = -90; count = 3; return; }
-
-    if (!std::strcmp(trend, "FortyFiveDown")) { angle_deg =  45; count = 1; return; }
-    if (!std::strcmp(trend, "SingleDown"))    { angle_deg =  90; count = 1; return; }
-    if (!std::strcmp(trend, "DoubleDown"))    { angle_deg =  90; count = 2; return; }
-    if (!std::strcmp(trend, "TripleDown"))    { angle_deg =  90; count = 3; return; }
-
-    // иногда встречается "None"
-    if (!std::strcmp(trend, "None"))          { angle_deg = 0; count = 0; return; }
-
-    angle_deg = 0;
-    count = 1;
-}
-
-// цвет BG по границам sgvBounds
-// bounds[0]=low, bounds[1]=lowWarn, bounds[2]=highWarn, bounds[3]=high
-static lv_color_t bg_color_for_sgv(float sgv, const float bounds[4]) {
-    if (!std::isfinite(sgv)) return lv_color_make(160,160,160);
-
-    const float low      = bounds[0];
-    const float lowWarn  = bounds[1];
-    const float highWarn = bounds[2];
-    const float high     = bounds[3];
-
-    if (sgv < low)      return lv_color_make(255, 0, 0);      // гипо
-    if (sgv < lowWarn)  return lv_color_make(255, 160, 0);    // низко
-    if (sgv <= highWarn)return lv_color_make(0, 255, 0);       // норма 
-    if (sgv <= high)    return lv_color_make(255, 160, 0);    // высоко
-    return lv_color_make(255, 0, 0);                          // очень высоко
-}
-
-// ======================================================
-//                     Cache (previous values)
-// ======================================================
-static float  prev_sgv_mmol   = NAN;
-static float  prev_iob        = NAN;
-static float  prev_cob        = NAN;
-static float  prev_delta_mmol = NAN;
-
-static int    prev_bat        = -999;
-
-static char   prev_bg_txt[16]    = "";
-static char   prev_iob_txt[16]   = "";
-static char   prev_cob_txt[16]   = "";
-static char   prev_delta_txt[16] = "";
-static char   prev_bat_txt[16]   = "";
-static char   prev_age_txt[16]   = "";
-static char   prev_time_txt[16]  = "";
-static char   prev_trend_txt[24] = "";
-
-static lv_color_t prev_delta_color = lv_color_make(255,0,0);
-static lv_color_t prev_bat_color   = lv_color_make(100,255,0);
-static lv_color_t prev_bg_color    = lv_color_hex(0xFFFF00);
-
-// ======================================================
-//                     main_update_full
-// ======================================================
 void main_update_full(const NightscoutData& ns) {
-    if (!label_bg) return;
+  if (!label_bg) return;
 
-    // ---- BG (sgv) ----
-    if (!std::isfinite(prev_sgv_mmol) || !std::isfinite(ns.sgv_mmol) ||
-        std::fabs(ns.sgv_mmol - prev_sgv_mmol) > 0.01f) {
-
-        prev_sgv_mmol = ns.sgv_mmol;
-
-        char s[16];
-        if (std::isfinite(ns.sgv_mmol) && ns.sgv_mmol > 0.0f)
-            std::snprintf(s, sizeof(s), "%.1f", ns.sgv_mmol);
-        else
-            std::snprintf(s, sizeof(s), "--.-");
-
-        set_label_if_changed(label_bg, s, prev_bg_txt, sizeof(prev_bg_txt));
-
-        // цвет BG по границам
-        lv_color_t c = bg_color_for_sgv(ns.sgv_mmol, ns.sgvBounds);
-        set_color_if_changed(label_bg, c, &prev_bg_color);
+  // 1) Сначала — время (оно не зависит от Nightscout)
+  if (label_time) {
+    tm tml;
+    if (getLocalTime(&tml, 10)) {
+      char timeStr[8];
+      std::snprintf(timeStr, sizeof(timeStr), "%02d:%02d", tml.tm_hour, tml.tm_min);
+      ui_set_label_if_changed(label_time, timeStr, g_cache.time, sizeof(g_cache.time));
     }
+  }
 
-    // ---- IOB ----
-    if (!std::isfinite(prev_iob) || !std::isfinite(ns.iob) || std::fabs(ns.iob - prev_iob) > 0.01f) {
-        prev_iob = ns.iob;
-        char s[16];
-        if (std::isfinite(ns.iob)) std::snprintf(s, sizeof(s), "I: %.2f", ns.iob);
-        else                       std::snprintf(s, sizeof(s), "I: --");
-        set_label_if_changed(label_iob, s, prev_iob_txt, sizeof(prev_iob_txt));
-    }
+  // 2) Общая логика NS (sgv/delta/age/colors/arrows)
+  const NsUiView v = ns_make_view(ns);
 
-    // ---- COB ----
-    if (!std::isfinite(prev_cob) || !std::isfinite(ns.cob) || std::fabs(ns.cob - prev_cob) > 0.1f) {
-        prev_cob = ns.cob;
-        char s[16];
-        if (std::isfinite(ns.cob)) std::snprintf(s, sizeof(s), "C: %.0f", ns.cob);
-        else                       std::snprintf(s, sizeof(s), "C: --");
-        set_label_if_changed(label_cob, s, prev_cob_txt, sizeof(prev_cob_txt));
-    }
+  ui_set_label_if_changed(label_bg, v.sgv, g_cache.sgv, sizeof(g_cache.sgv));
+  ui_set_color_if_changed(label_bg, v.zoneCol, &g_cache.zoneCol);
 
-    // ---- Delta (текст + цвет) ----
-    if (!std::isfinite(prev_delta_mmol) || !std::isfinite(ns.delta_mmol) ||
-        std::fabs(ns.delta_mmol - prev_delta_mmol) > 0.01f) {
+  ui_set_label_if_changed(label_delta, v.delta, g_cache.delta, sizeof(g_cache.delta));
+  ui_set_color_if_changed(label_delta, v.deltaCol, &g_cache.deltaCol);
 
-        prev_delta_mmol = ns.delta_mmol;
+  ui_set_label_if_changed(label_age, v.age, g_cache.age, sizeof(g_cache.age));
 
-        char s[16];
-        if (std::isfinite(ns.delta_mmol)) std::snprintf(s, sizeof(s), "%+.1f", ns.delta_mmol);
-        else                              std::snprintf(s, sizeof(s), "--");
+  // 3) IOB/COB (на main-экране их раньше вообще не обновляли)
+  if (label_iob) {
+    char s[16] = "I: --";
+    if (!v.stale && std::isfinite(ns.iob)) std::snprintf(s, sizeof(s), "I: %.2f", ns.iob);
+    ui_set_label_if_changed(label_iob, s, g_cache.iob, sizeof(g_cache.iob));
+  }
+  if (label_cob) {
+    char s[16] = "C: --";
+    if (!v.stale && std::isfinite(ns.cob)) std::snprintf(s, sizeof(s), "C: %.0f", ns.cob);
+    ui_set_label_if_changed(label_cob, s, g_cache.cob, sizeof(g_cache.cob));
+  }
 
-        set_label_if_changed(label_delta, s, prev_delta_txt, sizeof(prev_delta_txt));
+  // 4) Battery
+  if (label_battery_level) {
+    ui_set_label_if_changed(label_battery_level, v.bat[0] ? v.bat : "--%", g_cache.bat, sizeof(g_cache.bat));
+  }
+  if (label_battery) {
+    lv_label_set_text(label_battery, ns_battery_icon_for_pct(ns.pumpBatPct));
+    ui_set_color_if_changed(label_battery, v.batCol, &g_cache.batCol);
+  }
+  if (label_battery_level) {
+    lv_obj_set_style_text_color(label_battery_level, v.batCol, LV_PART_MAIN);
+  }
 
-        lv_color_t c = (!std::isfinite(ns.delta_mmol)) ? lv_color_make(200, 200, 200)
-                     : (ns.delta_mmol > 0.05f)         ? lv_color_make(0, 255, 0)
-                     : (ns.delta_mmol < -0.05f)        ? lv_color_make(255, 0, 0)
-                     :                                   lv_color_make(200, 200, 200);
+  // 5) Arrows
+  if (g_cache.angleDeg != v.angleDeg || g_cache.arrowCount != v.arrowCount || ui_str_changed(g_cache.trend, v.trend)) {
+    std::strncpy(g_cache.trend, v.trend, sizeof(g_cache.trend));
+    g_cache.trend[sizeof(g_cache.trend) - 1] = '\0';
 
-        set_color_if_changed(label_delta, c, &prev_delta_color);
-    }
+    g_cache.angleDeg = v.angleDeg;
+    g_cache.arrowCount = v.arrowCount;
 
-    // ---- Battery ----
-    {
-        int bat = ns.pumpBatPct; // -1 если нет
-
-        if (bat != prev_bat) {
-            prev_bat = bat;
-
-            const char* icon = battery_icon_for_pct(bat);
-            if (label_battery) lv_label_set_text(label_battery, icon);
-
-            char s[16];
-            if (bat >= 0) std::snprintf(s, sizeof(s), "%d%%", bat);
-            else          std::snprintf(s, sizeof(s), "--%%");
-            set_label_if_changed(label_battery_level, s, prev_bat_txt, sizeof(prev_bat_txt));
-
-            lv_color_t col = battery_color_for_pct(bat);
-            set_color_if_changed(label_battery, col, &prev_bat_color);
-            lv_obj_set_style_text_color(label_battery_level, col, LV_PART_MAIN);
-        }
-    }
-
-    // ---- Age (минуты от update_time_ms) ----
-    {
-        int age_min = -1;
-        time_t now = time(nullptr);
-
-        if (now > 100000 && ns.update_time_ms > 0) {
-            time_t upd = (time_t)(ns.update_time_ms / 1000ULL);
-            if (now >= upd) age_min = (int)((now - upd) / 60);
-        }
-
-        char s[16];
-        if (age_min >= 0) std::snprintf(s, sizeof(s), "%d мин", age_min);
-        else              std::snprintf(s, sizeof(s), "--");
-        set_label_if_changed(label_age, s, prev_age_txt, sizeof(prev_age_txt));
-    }
-
-    // ---- Time (HH:MM) ----
-    {
-        tm tml;
-        if (getLocalTime(&tml, 10)) {
-            char s[16];
-            std::snprintf(s, sizeof(s), "%02d:%02d", tml.tm_hour, tml.tm_min);
-            set_label_if_changed(label_time, s, prev_time_txt, sizeof(prev_time_txt));
-        }
-    }
-
-    // ---- Trend arrows: angle + count ----
-    if (str_changed(prev_trend_txt, ns.trend)) {
-        std::strncpy(prev_trend_txt, ns.trend, sizeof(prev_trend_txt));
-        prev_trend_txt[sizeof(prev_trend_txt) - 1] = '\0';
-
-        int ang = 0, cnt = 1;
-        trend_to_angle_and_count(ns.trend, ang, cnt);
-
-        arrows_apply_layout(ang, cnt);
-        arrow_set_angle_deg_via_right(ang, 300);
-    }
+    arrows_apply_layout(v.angleDeg, v.arrowCount);
+    arrow_set_angle_deg_via_right(v.angleDeg, 300);
+  }
 }
+
 
 // ======================================================
 //                     ui_main_create
@@ -412,8 +249,7 @@ lv_obj_t *ui_main_create() {
     lv_obj_t * arrow_anchor = lv_obj_create(main_screen);
     lv_obj_set_size(arrow_anchor, 1, 1);
     lv_obj_set_pos(arrow_anchor, PX, PY);
-    lv_obj_set_style_text_color(label_delta, lv_color_make(255, 0, 0), LV_PART_MAIN);
-    //lv_obj_add_flag(arrow_anchor, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(arrow_anchor, LV_OBJ_FLAG_HIDDEN);
 
     label_delta = lv_label_create(main_screen);
     lv_obj_set_style_text_color(label_delta, lv_color_make(255, 0, 0), LV_PART_MAIN);

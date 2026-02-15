@@ -2,7 +2,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
-
 #include "logs.h" 
 
 struct WifiCred {
@@ -22,6 +21,10 @@ struct WifiManagerConfig {
   IPAddress apIp                 = IPAddress(192,168,4,1);
   IPAddress apGw                 = IPAddress(192,168,4,1);
   IPAddress apMask               = IPAddress(255,255,255,0);
+
+  uint8_t  beginAttempts         = 3;      // 3 попытки на старте
+  uint32_t reconnectPeriodMs     = 3000;   // период попыток при обрыве
+  uint32_t reconnectTryWindowMs  = 8000;   // окно ожидания WL_CONNECTED на одну попытку
 };
 
 class WifiManager {
@@ -44,10 +47,6 @@ private:
   WiFiMulti _multi;
   LogBuffer* _logs = nullptr;
   bool _apMode = false;
-
-  void logI(const String& s);
-  void logW(const String& s);
-  void logE(const String& s);
 
   void logStatus(const char* prefix = nullptr);
   void startFallbackAP();

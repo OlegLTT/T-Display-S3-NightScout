@@ -1,113 +1,71 @@
 #include "wifi_manager.h"
 
-void WifiManager::logI(const String& s) {
-  Serial.println(s);
-  if (!_logs) return;
-
-  // В буфер пишем только ключевые параметры Wi-Fi
-  if (s.startsWith("[WiFi] CONNECTED") ||
-      s.startsWith("[WiFi] IP") ||
-      s.startsWith("[WiFi] RSSI") ||
-      s.startsWith("[WiFi] status") ||
-      s.startsWith("[WiFi] hostname") ||
-      s.startsWith("[WiFi] timeout")) {
-    _logs->add(LogLevel::Info, s);
-  }
-}
-
-void WifiManager::logW(const String& s) {
-  Serial.println(s);
-  if (_logs) _logs->add(LogLevel::Warn, s);
-}
-
-void WifiManager::logE(const String& s) {
-  Serial.println(s);
-  if (_logs) _logs->add(LogLevel::Error, s);
-}
-
 void WifiManager::addNetworks(const WifiCred* list, size_t count) {
   for (size_t i = 0; i < count; i++) {
     if (!list[i].ssid || list[i].ssid[0] == '\0') continue;
 
     const char* pass = list[i].pass;
     if (!pass || pass[0] == '\0') {
-      logI(String("[WiFi] addAP: '") + list[i].ssid + "' (open)");
+      logs::logIf("[WiFi] addAP: '%s' (open)", list[i].ssid);
       _multi.addAP(list[i].ssid, nullptr);
     } else {
-      logI(String("[WiFi] addAP: '") + list[i].ssid + "' (password set)");
+      logs::logIf("[WiFi] addAP: '%s' (password set)", list[i].ssid);
       _multi.addAP(list[i].ssid, pass);
     }
   }
 }
 
 bool WifiManager::begin() {
-  _apMode = false;
-
-  logI("[WiFi] ---- begin ----");
-  logI(String("[WiFi] hostname: ") + (_cfg.hostname ? _cfg.hostname : "(null)"));
-  logI(String("[WiFi] timeout : ") + String((unsigned long)_cfg.connectTimeoutMs) + " ms");
+  logs::logI("[WiFi] ---- begin ----");
+  logs::logIf("[WiFi] hostname: %s", _cfg.hostname ? _cfg.hostname : "(null)");
+  logs::logIf("[WiFi] timeout : %lu ms", (unsigned long)_cfg.connectTimeoutMs);
 
   WiFi.mode(WIFI_STA);
   if (_cfg.hostname && _cfg.hostname[0]) WiFi.setHostname(_cfg.hostname);
-  WiFi.setAutoReconnect(_cfg.enableAutoReconnect);
 
   uint32_t t0 = millis();
+  while (millis() - t0 < _cfg.connectTimeoutMs) {
+    if (_multi.run() == WL_CONNECTED) {
+      logs::logIf("[WiFi] CONNECTED: SSID='%s'", WiFi.SSID().c_str());
+      logs::logIf("[WiFi] IP       : %s", WiFi.localIP().toString().c_str());
 
-  while ((millis() - t0) < _cfg.connectTimeoutMs) {
-    uint8_t st = _multi.run();
+      int rssi = WiFi.RSSI();
+      logs::logIf("[WiFi] RSSI     : %d dBm", rssi);
+      if (rssi < -75) {
+        logs::logWf("[WiFi] Weak signal: %d dBm", rssi);
+      }
 
-    if (st == WL_CONNECTED) {
-        logI(String("[WiFi] CONNECTED: SSID='") + WiFi.SSID() + "'");
-        logI(String("[WiFi] IP       : ") + WiFi.localIP().toString());
-
-        int rssi = WiFi.RSSI();
-        logI(String("[WiFi] RSSI     : ") + String(rssi) + " dBm");
-
-        // Предупреждение о слабом сигнале
-        if (rssi < -75 && _logs) {
-          _logs->add(LogLevel::Warn,
-                     String("[WiFi] Слабый сигнал: ") + String(rssi) + " dBm");
-        }
-
-        logStatus("[WiFi] status  : ");
-        logI("[WiFi] ---- ok ----");
-        return true;
+      logs::logI("[WiFi] ---- ok ----");
+      return true;
     }
     delay(_cfg.retryDelayMs);
+    
   }
 
-  logE("[WiFi] CONNECT TIMEOUT");
-  logStatus("[WiFi] status  : ");
-
-  if (_cfg.enableFallbackAP) {
-    startFallbackAP();
-  } else {
-    logW("[WiFi] fallback AP disabled");
-  }
-
-  logE("[WiFi] ---- fail ----");
+  logs::logEf("[WiFi] CONNECT TIMEOUT");
   return false;
 }
 
+
 void WifiManager::startFallbackAP() {
-  logW("[WiFi] starting fallback AP mode...");
+  logs::logW("[WiFi] starting fallback AP mode...");
 
   WiFi.enableAP(true);
   WiFi.mode(WIFI_AP);
 
   bool cfgOk = WiFi.softAPConfig(_cfg.apIp, _cfg.apGw, _cfg.apMask);
-  logI(String("[WiFi] softAPConfig: ") + (cfgOk ? "OK" : "FAIL"));
+  logs::logIf("[WiFi] softAPConfig: %s", cfgOk ? "OK" : "FAIL");
 
   bool apOk = WiFi.softAP(_cfg.fallbackApSsid, _cfg.fallbackApPass);
-  logI(String("[WiFi] softAP start : ") + (apOk ? "OK" : "FAIL"));
+  logs::logIf("[WiFi] softAP start : %s", apOk ? "OK" : "FAIL");
 
-  logI(String("[WiFi] AP SSID      : ") + _cfg.fallbackApSsid);
-  logI(String("[WiFi] AP IP        : ") + WiFi.softAPIP().toString());
+  logs::logIf("[WiFi] AP SSID      : %s", _cfg.fallbackApSsid ? _cfg.fallbackApSsid : "(null)");
+  logs::logIf("[WiFi] AP IP        : %s", WiFi.softAPIP().toString().c_str());
 
   _apMode = apOk;
 
   if (!apOk) {
-    logE("[WiFi] AP mode failed");
+    logs::logE("[WiFi] AP mode failed");
   }
 }
 
@@ -127,5 +85,6 @@ void WifiManager::logStatus(const char* prefix) {
     default:                  s = "UNKNOWN"; break;
   }
 
-  logI(String(p) + s + " (mode=" + String((int)WiFi.getMode()) + ")");
+  logs::logIf("%s%s (mode=%d)", p, s, (int)WiFi.getMode());
 }
+

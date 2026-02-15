@@ -18,14 +18,19 @@
 #include "ui_settings.h"
 
 #include "nightscout_client.h"
-//#include "buttons.h"
 #include "backlight.h"
-#include "overlay.h"
+#include "ui_overlay.h"
 #include "logs.h"
 #include "wifi_manager.h"
 
 #if defined(BOARD_TDISPLAY_S3)
+  #define UB_DEB_TIME 50      // дебаунс
+  #define UB_HOLD_TIME 600    // время до перехода в состояние "удержание"
+  #define UB_STEP_TIME 400    // время до перехода в состояние "импульсное удержание"
+  #define UB_STEP_PRD 100     // период импульсов
+  #define UB_CLICK_TIME 500   // ожидание кликов
   #include <uButton.h>
+  #include <uButtonMulti.h>
 #endif
 
 // LVGL display port (как у тебя)
@@ -74,6 +79,7 @@ static Backlight backlight;
 #if defined(BOARD_TDISPLAY_S3)
   static uButton btnBoot(PIN_BUTTON_A);
   static uButton btnUser(PIN_BUTTON_B);
+  static uButtonMulti btnBoth;
 #endif
 
 static volatile bool g_rebootRequested = false;
@@ -85,6 +91,7 @@ static int lastClockYday = -1;
 
 // ---- Daily NTP sync ----
 static time_t lastNtpSync = 0;
+static bool g_ntpWasValid = false;
 static constexpr time_t NTP_SYNC_PERIOD = 24 * 60 * 60; // 24 часа
 
 // ======================================================
@@ -101,79 +108,76 @@ static bool needUpdateScreen  = true;
 
 static ScreenId desiredUiScreen = ScreenId::SCREEN_MAIN;   // что надо восстановить (0=main,1=clock)
 static bool onboardingActive = false;
-// ======================================================
-//                    LVGL tick (1ms) timer
-// ======================================================
-//static hw_timer_t* g_lv_tick_timer = nullptr;
 
-// static void IRAM_ATTR lv_tick_isr() {
-//   lv_tick_inc(1);
-// }
+static ScreenId g_pendingScreen = ScreenId::SCREEN_MAIN;
+static ScreenId prevScreenBeforeLogs = ScreenId::SCREEN_MAIN; 
+static bool g_havePendingAnim = false;
+static lv_scr_load_anim_t g_pendingAnim = LV_SCR_LOAD_ANIM_NONE;
+static uint32_t g_pendingAnimTime = 250;
+static uint32_t g_pendingAnimDelay = 0;
 
-// static void lv_tick_init_1ms() {
-//   // timer 0, prescaler 80 => 1us per tick (ESP32 APB 80MHz)
-//   g_lv_tick_timer = timerBegin(0, 80, true);
-//   timerAttachInterrupt(g_lv_tick_timer, &lv_tick_isr, true);
-//   timerAlarmWrite(g_lv_tick_timer, 1000, true); // 1000 us => 1 ms
-//   timerAlarmEnable(g_lv_tick_timer);
-// }
+static lv_obj_t* screenById(ScreenId id) {
+  switch (id) {
+    case ScreenId::SCREEN_MAIN:     return g_scr_main;
+    case ScreenId::SCREEN_CLOCK:    return g_scr_clock;
+    case ScreenId::SCREEN_LOGS:     return g_scr_logs;
+    case ScreenId::SCREEN_FIRST:    return g_scr_first;
+    case ScreenId::SCREEN_SETTINGS: return g_scr_settings;
+    default:                        return g_scr_main;
+  }
+}
 
-// // ======================================================
-// //                  UI save/restore helpers
-// // ======================================================
-// static void saveUiScreenIfNeeded() {
-//   if (currentScreen == SCREEN_MAIN || currentScreen == SCREEN_CLOCK) {
-//     desiredUiScreen = (uint8_t)currentScreen;
-//     appCfg.lastUiScreen = desiredUiScreen;
-//     settingsStore.save(appCfg);
-//     Serial.printf("[UI] save last screen=%d\n", (int)desiredUiScreen);
-//   }
-// }
+static void requestScreen(ScreenId id, lv_scr_load_anim_t anim, uint32_t time=250, uint32_t delay=0) {
+  g_pendingScreen = id;
+  g_pendingAnim = anim;
+  g_pendingAnimTime = time;
+  g_pendingAnimDelay = delay;
+  g_havePendingAnim = (anim != LV_SCR_LOAD_ANIM_NONE);
+  needUpdateScreen = true;
+}
 
-// static void ui_load(ScreenId s)
-// {
-//   switch(s) {
-//     case SCREEN_MAIN:
-//       if(g_scr_main) lv_screen_load(g_scr_main);
-//       break;
-//     case SCREEN_CLOCK:
-//       if(g_scr_clock) lv_screen_load(g_scr_clock);
-//       break;
-//     case SCREEN_LOGS:
-//       if(g_scr_logs) lv_screen_load(g_scr_logs);
-//       break;
-//     case SCREEN_FIRST:
-//     default:
-//       if(g_scr_first) lv_screen_load(g_scr_first);
-//       else if(g_scr_main) lv_screen_load(g_scr_main);
-//       break;
-//   }
-// }
+static void enterLogs() {
+  if (currentScreen == ScreenId::SCREEN_LOGS) return;
+  prevScreenBeforeLogs = currentScreen;
+  currentScreen = ScreenId::SCREEN_LOGS;
+  requestScreen(currentScreen, LV_SCR_LOAD_ANIM_NONE);
+  needUpdateScreen = true;
+  ui_logs_refresh();
+}
 
+static void exitLogs() {
+  if (currentScreen != ScreenId::SCREEN_LOGS) return;
+  currentScreen = prevScreenBeforeLogs;
+  requestScreen(currentScreen, LV_SCR_LOAD_ANIM_NONE);
+  needUpdateScreen = true;
+}
 
 // ======================================================
 //                      Button callbacks
 // ======================================================
 static void onUserSingle() {
-  // если сейчас captive portal активен — single = reboot/exit
   if (portal.active()) {
     g_rebootRequested = true;
     return;
   }
 
-  // в режиме приветствия игнорируем одиночное нажатие
-  // (если у тебя есть onboardingActive — подключи; я оставил поведение как было)
-  // if (onboardingActive) return;
-
+  // logs -> main без анимации (или тоже можно)
   if (currentScreen == ScreenId::SCREEN_LOGS) {
     currentScreen = ScreenId::SCREEN_MAIN;
-  } else {
-    currentScreen = (currentScreen == ScreenId::SCREEN_MAIN) ? ScreenId::SCREEN_CLOCK : ScreenId::SCREEN_MAIN;
+    requestScreen(currentScreen, LV_SCR_LOAD_ANIM_NONE);
+    Serial.println("onUserSingle");
+    return;
   }
-  // saveUiScreenIfNeeded();
-  // ui_load(currentScreen);
+
+  if (currentScreen == ScreenId::SCREEN_MAIN) {
+    currentScreen = ScreenId::SCREEN_CLOCK;
+    requestScreen(currentScreen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 220);
+  } else {
+    currentScreen = ScreenId::SCREEN_MAIN;
+    requestScreen(currentScreen, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 220);
+  }
+
   Serial.println("onUserSingle");
-  needUpdateScreen = true;
 }
 
 static void onUserLong() {
@@ -197,22 +201,82 @@ static void onBootSingle() {
 }
 
 static void onBootLong() {
+  // вход
+  prevScreenBeforeLogs = currentScreen;
   currentScreen = ScreenId::SCREEN_LOGS;
+  requestScreen(currentScreen, LV_SCR_LOAD_ANIM_NONE);
   needUpdateScreen = true;
 }
 
+static bool g_bothHoldLatched = false;     // чтобы enterLogs() сработал один раз
+static uint32_t g_lastScrollMs = 0;        // троттлинг скролла
+static constexpr uint32_t SCROLL_PERIOD_MS = 90;
+
 static void tickButtons() {
-  // tick() вернёт true при смене состояния :contentReference[oaicite:5]{index=5}
-  if (btnUser.tick()) {
+  const uint32_t now = millis();
+
+  // 1) тикаем одиночные кнопки
+  bool uTick = btnUser.tick();
+  bool bTick = btnBoot.tick();
+
+  // 2) тикаем мульти (две кнопки одновременно)
+  btnBoth.tick(btnBoot, btnUser);
+
+  // ---- 2 кнопки вместе ----
+  // Вход в LOG: обе кнопки долго (hold), но только один раз на одно удержание
+  if (btnBoth.hold()) {
+    if (!g_bothHoldLatched) {
+      g_bothHoldLatched = true;
+      enterLogs();
+    }
+    return; // не даём одиночным событиям срабатывать в тот же цикл
+  }
+
+  // Сбрасываем защёлку, когда комбо отпустили
+  if (btnBoth.release() || btnBoth.releaseHold() || btnBoth.releaseStep()) {
+    g_bothHoldLatched = false;
+  }
+
+  // Выход из LOG: обе кнопки коротко
+  if (btnBoth.click()) {
+    if (currentScreen == ScreenId::SCREEN_LOGS) {
+      exitLogs();
+      return;
+    }
+  }
+
+  // ---- ЛОГ-экран: автоскролл импульсами (ТОЛЬКО step, без click) ----
+  if (currentScreen == ScreenId::SCREEN_LOGS) {
+    // троттлим любые скроллы
+    if (now - g_lastScrollMs < SCROLL_PERIOD_MS) return;
+
+    bool scrolled = false;
+
+    if (uTick && btnUser.step()) { ui_logs_scroll(-1); scrolled = true; } 
+    else if (bTick && btnBoot.step()) { ui_logs_scroll(+1); scrolled = true; }
+
+    // Одношаговый click можно оставить, но тогда НЕ вместе с step.
+    // Лучше так: click только если step не сработал.
+    if (!scrolled) {
+      if (uTick && btnUser.click()) { ui_logs_scroll(-1); scrolled = true; }
+      else if (bTick && btnBoot.click()) { ui_logs_scroll(+1); scrolled = true; }
+    }
+
+    if (scrolled) g_lastScrollMs = now;
+    return;
+  }
+
+  // ---- Обычный режим (НЕ логи) ----
+  if (uTick) {
     if (btnUser.click()) onUserSingle();
     if (btnUser.hold())  onUserLong();
   }
 
-  if (btnBoot.tick()) {
+  if (bTick) {
     if (btnBoot.click()) onBootSingle();
-    if (btnBoot.hold())  onBootLong();
   }
 }
+
 
 // ======================================================
 //                         initWifi
@@ -226,6 +290,7 @@ static void initWifi() {
   wifiMgr.setConfig(wifiCfg);
   wifiMgr.setLogger(&g_logs);
 
+  logs::logIf("[WIFI] begin hostname=%s", wifiCfg.hostname ? wifiCfg.hostname : "(null)");
   // Добавляем сети из настроек
   WifiCred list[MAX_WIFI];
   size_t cnt = 0;
@@ -239,6 +304,7 @@ static void initWifi() {
   wifiMgr.addNetworks(list, cnt);
 
   bool wifiOk = wifiMgr.begin();
+  logs::logIf("[WIFI] begin ok=%d", (int)wifiOk);
 
   // ВСЕГДА стартуем с логов
   currentScreen = ScreenId::SCREEN_LOGS;
@@ -289,7 +355,7 @@ static void tickNightscout() {
 
     if (hadValidTime && ageSec > STALE_SEC && rcnt >= MIN_TICKS) {
       rcnt = 0;
-      Serial.printf("[NS] stale age=%ds -> requestUpdate()\n", (int)ageSec);
+      logs::logIf("[SYS] stale age=%ds -> request update", (int)ageSec);
       g_ns.requestUpdate();
     }
     rcnt++;
@@ -310,7 +376,7 @@ static void tickNightscout() {
       bootWaitNsSecond = false;
       currentScreen = (ScreenId)desiredUiScreen;
       needUpdateScreen = true;
-      Serial.println("[BOOT] NS OK -> show UI");
+      logs::logI("[SYS] NS connected");
     }
   }
 }
@@ -320,81 +386,29 @@ static void tickNightscout() {
 //                  Daily NTP resync (как было)
 // ======================================================
 static void tickTimeResync() {
-  if (WiFi.status() == WL_CONNECTED) {
-    time_t now = time(nullptr);
-    if (now > 100000) {
-      if (lastNtpSync == 0) {
-        lastNtpSync = now;
-      } else if ((now - lastNtpSync) >= NTP_SYNC_PERIOD) {
-        Serial.println("[TIME] Daily NTP resync");
-        applyTimeConfig(appCfg.tzMinutes, appCfg.dstEnable);
-        lastNtpSync = now;
-      }
-    }
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  time_t now = time(nullptr);
+  const bool valid = (now > 100000);
+
+  // 1) Однократный лог появления валидного времени
+  if (valid && !g_ntpWasValid) {
+    g_ntpWasValid = true;
+    logs::logI("[TIME] NTP synced");
+    lastNtpSync = now;              // <-- важно: считаем, что синк случился "сейчас"
+  }
+
+  // 2) Ежедневный ресинк
+  if (valid && lastNtpSync != 0 && (now - lastNtpSync) >= NTP_SYNC_PERIOD) {
+    logs::logI("[TIME] Daily NTP resync");
+    applyTimeConfig(appCfg.tzMinutes, appCfg.dstEnable);
+
+    // взять актуальное время после configTime()
+    time_t now2 = time(nullptr);
+    if (now2 > 100000) lastNtpSync = now2;
+    else lastNtpSync = now; // fallback на всякий случай
   }
 }
-
-// static void first_update_full() {
-//   // пока нет onboarding экрана в LVGL — просто показываем MAIN
-//   main_update_full(nsData);
-// }
-
-// ======================================================
-//      LVGL screens tick (ВАЖНО: логика как в старом tickScreen)
-// ======================================================
-// static void screens_tick_cb(lv_timer_t*) {
-//   // ----- Clock: redraw when minute changes -----
-//   if (currentScreen == SCREEN_CLOCK) {
-//     tm tml;
-//     if (getLocalTime(&tml, 10)) {
-//       if (tml.tm_min  != lastClockMin ||
-//           tml.tm_hour != lastClockHour ||
-//           tml.tm_yday != lastClockYday) {
-//         lastClockMin  = tml.tm_min;
-//         lastClockHour = tml.tm_hour;
-//         lastClockYday = tml.tm_yday;
-//         needUpdateScreen = true;
-//       }
-//     }
-//   } else {
-//     lastClockMin = lastClockHour = lastClockYday = -1;
-//   }
-
-//   // overlay timer
-//   bool overlayChanged = brOverlay.update();
-
-//   // logs: update only if version changed
-//   if (currentScreen == SCREEN_LOGS) {
-//     uint32_t v = g_logs.version();
-//     if (v != lastLogVersion) {
-//       lastLogVersion = v;
-//       needUpdateScreen = true;
-//     }
-//   }
-
-//   // базовый экран (ВАЖНО: тут должны быть LVGL-апдейты, не sprite!)
-//   if (needUpdateScreen) {
-//     if (currentScreen == SCREEN_MAIN) {
-//       main_update_full(nsData);
-//     } else if (currentScreen == SCREEN_CLOCK) {
-//       clock_update_full(nsData);
-//     } else if (currentScreen == SCREEN_LOGS) {
-//       logs_update_full(g_logs);
-//     } else { // SCREEN_FIRST
-//       first_update_full();
-//     }
-//     needUpdateScreen = false;
-//   }
-
-//   // overlay поверх
-//   if (brOverlay.visible()) {
-//     brOverlay.render();
-//   } else if (overlayChanged) {
-//     // overlay только что исчез -> один раз обновить базу, чтобы убрать "след"
-//     needUpdateScreen = true;
-//   }
-// }
-
 
 // ======================================================
 //                     Portal tick (LVGL)
@@ -424,31 +438,7 @@ static void tickPortal() {
 // ======================================================
 //                            SETUP
 // ======================================================
-// static lv_obj_t* scr;
-// static lv_obj_t* box;
 
-// void setup() {
-//   Serial.begin(115200);
-//   delay(300);
-//   Serial.println("SMOKE TEST START");
-
-//   gfx::LVGL_Display::instance().init();
-
-//   scr = lv_obj_create(nullptr);
-//   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-//   lv_obj_set_size(scr, LV_PCT(100), LV_PCT(100));
-//   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-
-//   box = lv_obj_create(scr);
-//   lv_obj_set_size(box, LV_PCT(100), LV_PCT(100));
-//   lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
-//   lv_obj_set_style_border_width(box, 0, 0);
-
-//   lv_screen_load(scr);
-
-//   // Прокрутим несколько кадров, чтобы гарантированно ушёл flush
-//   for (int i = 0; i < 50; i++) { gfx::LVGL_Display::instance().loop(); delay(10); }
-// }
 #include "nvs_flash.h"
 #include "esp_err.h"
 
@@ -456,133 +446,70 @@ static void initSettingsSafe() {
   // Дай время подключить монитор порта (особенно если USB CDC)
   delay(1500);
 
-  Serial.println("[BOOT] initSettingsSafe");
+  logs::logI("[SYS] init settings");
 
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    Serial.printf("[NVS] init err=%s -> erase\n", esp_err_to_name(err));
+    logs::logW("[SYS] NVS reset");
     nvs_flash_erase();
     err = nvs_flash_init();
   }
-  Serial.printf("[NVS] init=%s\n", esp_err_to_name(err));
+
+  if (err != ESP_OK) {
+    logs::logEf("[SYS] NVS init error=%s", esp_err_to_name(err));
+  } else {
+    logs::logI("[SYS] NVS init OK");
+  }
 
   bool ok = settingsStore.begin();
-  Serial.printf("[PREF] begin=%d\n", ok);
-
   if (!ok) {
-    Serial.println("[PREF] begin failed -> using defaults");
+    logs::logW("[SYS] settings load failed -> defaults");
     appCfg = AppSettings();
     return;
   }
 
-  Serial.printf("[HEAP] before load: %u\n", (unsigned)ESP.getFreeHeap());
   settingsStore.load(appCfg);
-  Serial.printf("[HEAP] after  load: %u\n", (unsigned)ESP.getFreeHeap());
+  logs::logI("[SYS] settings loaded");
+
+  // --- отладка (оставляем в Serial) ---
+  Serial.printf("[HEAP] after settings load: %u\n", (unsigned)ESP.getFreeHeap());
 }
+
 
 void setup() {
   Serial.begin(115200);
 
+  // ---- LVGL display init ----
+  gfx::LVGL_Display::instance().init();
+  g_scr_logs  = ui_logs_create();
+  ui_logs_set_buffer(&g_logs);
+  
+
+  logs::bind(&g_logs, true);  // true = также писать в Serial
+  logs::logI("[SYS] boot");
+
+  g_scr_main  = ui_main_create();
+  g_scr_clock = ui_clock_create();
+  g_scr_first = ui_first_create();
+  g_scr_settings = ui_settings_create();
+  brOverlay.init(lv_layer_top());
+  
+  // 1) Явно загрузим стартовый экран (например LOGS) до включения подсветки
+  lv_screen_load(g_scr_logs);
+
+  // 2) Прокачаем несколько циклов, чтобы flush реально ушёл в дисплей
+  for (int i = 0; i < 10; i++) {
+    gfx::LVGL_Display::instance().loop();
+    delay(5);
+  }
+
   // ---- Settings ----
   initSettingsSafe();
-
-  // esp_err_t err = nvs_flash_init();
-  // if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-  //   Serial.printf("[NVS] init err=%s -> erase\n", esp_err_to_name(err));
-  //   nvs_flash_erase();
-  //   err = nvs_flash_init();
-  // }
-  // Serial.printf("[NVS] init=%s\n", esp_err_to_name(err));
-
-  // bool ok = settingsStore.begin();
-  // Serial.printf("[PREF] begin=%d\n", ok);
-
-  // if (!ok) {
-  //   Serial.println("[PREF] begin failed -> using defaults");
-  //   appCfg = AppSettings();
-  //   return;
-  // }
-
-  // Serial.printf("[HEAP] before load: %u\n", (unsigned)ESP.getFreeHeap());
-  // settingsStore.load(appCfg);
-  // Serial.printf("[HEAP] after  load: %u\n", (unsigned)ESP.getFreeHeap());
-
-  // bool ok = settingsStore.begin();
-  // if (!ok) {
-  //   Serial.println("NVS init failed!");
-  //   // можно хотя бы продолжить без настроек
-  // } else {
-  //  // settingsStore.load(appCfg);
-  // }
-  //settingsStore.load(appCfg);
-
-  // if (appCfg.brightness < 1 || appCfg.brightness > 100) {
-  //   appCfg.brightness = 100;
-  // }
-
-  //desiredUiScreen = (appCfg.lastUiScreen <= 1) ? appCfg.lastUiScreen : 0;
 
   // ---- Backlight (через твой Backlight класс) ----
   Backlight::Use(backlight);
   Backlight::beginStatic();
   backlight.restoreFromPercent(appCfg.brightness);
-
-  // ---- LVGL display init (твоя обвязка) ----
-  // ВАЖНО: это должно внутри делать lv_init(), регистрация дисплея, flush, input и т.п.
-  //delay(1000);
-  gfx::LVGL_Display::instance().init();
-
-  g_scr_main  = ui_main_create();
-  g_scr_clock = ui_clock_create();
-  g_scr_logs  = ui_logs_create();
-  g_scr_first = ui_first_create();
-  g_scr_settings = ui_settings_create();
-
-  // lv_obj_t* boot = lv_obj_create(nullptr);
-  // lv_obj_set_style_bg_color(boot, lv_color_black(), 0);
-  // lv_obj_set_style_bg_opa(boot, LV_OPA_COVER, 0);
-  // lv_screen_load(boot);
-
-  // gfx::LVGL_Display::instance().loop(); // один кадр чёрного
-  // delay(50);
-
-  // ---- LVGL tick 1ms ----
-  //lv_tick_init_1ms();
-
-// #if defined(BOARD_TDISPLAY_S3)
-//   Serial.println();
-//   Serial.println("Booting LVGL on T-Display S3");
-
-//   // Создаём экраны (объекты)
-//   g_scr_main  = ui_main_create();
-//   g_scr_clock = ui_clock_create();
-//   g_scr_logs  = ui_logs_create();
-
-//   // currentScreen = ScreenId::SCREEN_MAIN;
-//   // lv_screen_load(g_scr_main);
-
-//  // needUpdateScreen = true;
-
-// #elif defined(BOARD_ESP32S3_DEV)
-//   delay(2000);
-//   Serial.println("Hello from ESP32-S3 1.43 AMOLED");
-
-//   pinMode(PIN_BACKLIGHT, OUTPUT);
-//   digitalWrite(PIN_BACKLIGHT, HIGH);
-
-//   pinMode(PIN_TFT_RST, OUTPUT);
-//   digitalWrite(PIN_TFT_RST, LOW);
-//   delay(20);
-//   digitalWrite(PIN_TFT_RST, HIGH);
-//   delay(20);
-
-//   Serial.println("Init touch + LCD (LVGL demo)...");
-//   Touch_Init();
-//   lcd_lvgl_Init();
-//   Serial.println("Init done.");
-
-//   // Если на этой плате другие экраны/создание — добавь тут
-// #endif
 
   // Onboarding (первый запуск)
   if (!appCfg.onboardingDone) {
@@ -597,21 +524,8 @@ void setup() {
   currentScreen = ScreenId::SCREEN_LOGS;
   needUpdateScreen = true;
 
-  // ---- WiFi + NTP + Nightscout ----
-  g_logs.add(LogLevel::Info, String("Connecting to Wi-Fi"));
-  initWifi();
-
-
-  // === Hardware/UI init ===
-  // initDisplay();   // TFT, sprite, overlay, backlight
-  // initButtons();   // USER/BOOT + callbacks
-
   // Первое сообщение в логи — до Wi-Fi, чтобы уже было что показать
-  g_logs.add(LogLevel::Info, String("Connecting to Wi-Fi"));
-
-  // Нарисовать лог-экран сразу
-  //drawLogScreen(sprite, logs);
-  //needUpdateScreen = true;
+  logs::logI("[WIFI] connecting");
 
   // === Wi-Fi + NTP + Nightscout ===
   initWifi();
@@ -661,26 +575,36 @@ void loop() {
 
   // базовый экран
   if (needUpdateScreen) {
-    if (currentScreen == ScreenId::SCREEN_MAIN) {
-          // 1) если экран ещё не загружен — загрузить
-        if (lv_scr_act() != g_scr_main) {
-          lv_screen_load(g_scr_main);
-        }
-        // 2) обновить данные
-        main_update_full(nsData);
-    } else if (currentScreen == ScreenId::SCREEN_CLOCK) {
-      lv_screen_load(g_scr_clock);
-    } else if (currentScreen == ScreenId::SCREEN_LOGS) {
-      lv_screen_load(g_scr_logs);
-    } else if (currentScreen == ScreenId::SCREEN_FIRST) {
-      lv_screen_load(g_scr_first);
-    } else if (currentScreen == ScreenId::SCREEN_SETTINGS) {
-      lv_screen_load(g_scr_settings);
-      Serial.printf("ScreenId::SCREEN_SETTINGS");
+    lv_obj_t* target = screenById(currentScreen);
+
+    // если есть заявка на анимацию — используем её при смене экрана
+    if (lv_scr_act() != target) {
+      if (g_havePendingAnim) {
+        lv_scr_load_anim(target, g_pendingAnim, g_pendingAnimTime, g_pendingAnimDelay, false);
+      } else {
+        lv_screen_load(target);
+      }
     }
+
+    // обновления контента
+    if (currentScreen == ScreenId::SCREEN_MAIN) {
+      main_update_full(nsData);
+    } else if (currentScreen == ScreenId::SCREEN_CLOCK) {
+      clock_update_full(nsData);  
+    } else if (currentScreen == ScreenId::SCREEN_SETTINGS) {
+      // ...
+    } else if (currentScreen == ScreenId::SCREEN_LOGS) {
+      // ...
+    } else if (currentScreen == ScreenId::SCREEN_FIRST) {
+      // ...
+    }
+
+    // сброс заявки
+    g_havePendingAnim = false;
+    g_pendingAnim = LV_SCR_LOAD_ANIM_NONE;
+
     needUpdateScreen = false;
   }
-
   tickTimeResync();
 
   // LVGL

@@ -1,13 +1,25 @@
 // ======================= nightscout_client.cpp =======================
 #include "nightscout_client.h"
+#include "logs.h"
+#include <stdarg.h>
 
 using su::SH;
+
+// -------------------- Tunables --------------------
+static constexpr size_t READ_CHUNK = 512;     // читаем порциями
+static constexpr size_t BODY_MAX   = 16 * 1024; // защита от раздувания
 
 // -------------------- Public API --------------------
 
 void NightscoutClient::begin(const NSConfig& cfg) {
   _cfg = cfg;
-  _hostError = false;
+  _hostErrorUntilMs = 0;
+
+  // сброс FSM
+  _r = Req{};
+  _r.ph = Phase::Idle;
+
+  _wantUpdate = false;
 }
 
 void NightscoutClient::requestUpdate() {
@@ -32,7 +44,6 @@ String NightscoutClient::makePropsPath(const String& base) const {
 }
 
 void NightscoutClient::sanitizeJson(String& s) const {
-  // чистим управляющие символы
   for (int i = 0; i < (int)s.length(); i++) {
     if ((uint8_t)s[i] < 32) s.setCharAt(i, ' ');
   }
@@ -65,12 +76,16 @@ bool NightscoutClient::splitUrl(const String& fullUrl, bool& https, String& host
   return !host.isEmpty();
 }
 
+static void applyBounds(const NSConfig& cfg, NightscoutData& out) {
+  memcpy(out.sgvBounds, cfg.sgvBounds, sizeof(out.sgvBounds));
+}
+
 // -------------------- FSM core --------------------
 
 void NightscoutClient::startReq(const String& base) {
   _r = Req{};
   _r.ph = Phase::Connect;
-  _r.tStart = millis();
+  _r.tStart  = millis();
   _r.tLastIO = _r.tStart;
 
   String full = makePropsPath(base);
@@ -79,9 +94,10 @@ void NightscoutClient::startReq(const String& base) {
     return;
   }
 
+  // TLS: если надо - insecure
   if (_r.https && _cfg.tlsInsecure) _r.cs.setInsecure();
 
-  NS_LOGI("[NS] startReq GET %s", _r.path.c_str());
+  logs::logIf("[NS] startReq GET %s", _r.path.c_str());
 }
 
 void NightscoutClient::abortReq() {
@@ -95,8 +111,9 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
   auto& r = _r;
   const uint32_t now = millis();
 
+  // таймаут по "пустоте IO"
   if (r.ph != Phase::Idle && (now - r.tLastIO) > _cfg.httpTimeoutMs) {
-    NS_LOGE("[NS] timeout phase=%d", (int)r.ph);
+    logs::logEf("[NS] timeout phase=%d", (int)r.ph);
     r.ph = Phase::Error;
   }
 
@@ -104,24 +121,36 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
 
   switch (r.ph) {
     case Phase::Connect: {
-      NS_LOGI("[NS] Connect %s:%u https=%d", r.host.c_str(), (unsigned)r.port, (int)r.https);
+      logs::logIf("[NS] Connect %s:%u https=%d", r.host.c_str(), (unsigned)r.port, (int)r.https);
+
       bool ok = c->connect(r.host.c_str(), r.port);
       r.tLastIO = now;
+
       if (!ok) {
-        NS_LOGE("[NS] connect failed");
+        logs::logE("[NS] connect failed");
         r.httpCode = -1;
-        _hostError = true;
+
+        // ❗️не вечный фатал, а пауза
+        const uint32_t backoff = (_cfg.hostErrorBackoffMs > 0) ? _cfg.hostErrorBackoffMs : 60000;
+        _hostErrorUntilMs = now + backoff;
+
         r.ph = Phase::Error;
         return false;
       }
+
+      // успех соединения — снимаем "ошибку хоста"
+      _hostErrorUntilMs = 0;
+
       r.ph = Phase::Send;
       return false;
     }
 
     case Phase::Send: {
-      NS_LOGI("[NS] Send request");
+      logs::logI("[NS] Send request (HTTP/1.0 no-chunked)");
+
+      // HTTP/1.0 — самый простой способ почти всегда избежать chunked
       String req =
-        String("GET ") + r.path + " HTTP/1.1\r\n" +
+        String("GET ") + r.path + " HTTP/1.0\r\n" +
         "Host: " + r.host + "\r\n" +
         "Connection: close\r\n" +
         "User-Agent: t-display-s3\r\n" +
@@ -145,8 +174,7 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
 
           line.trim();
           if (line.isEmpty()) {
-            NS_LOGI("[NS] Headers done (http=%d len=%d chunked=%d)",
-                    r.httpCode, r.contentLen, (int)r.chunked);
+            logs::logIf("[NS] Headers done (http=%d len=%d)", r.httpCode, r.contentLen);
             r.ph = Phase::ReadBody;
             break;
           }
@@ -160,9 +188,8 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
           lower.toLowerCase();
           if (lower.startsWith("content-length:")) {
             r.contentLen = lower.substring(String("content-length:").length()).toInt();
-          } else if (lower.startsWith("transfer-encoding:") && lower.indexOf("chunked") >= 0) {
-            r.chunked = true;
           }
+          // chunked игнорируем: при HTTP/1.0 его обычно не будет
         }
 
         if (r.headerLine.length() > 1024) { r.ph = Phase::Error; break; }
@@ -172,9 +199,9 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
 
     case Phase::ReadBody: {
       size_t readNow = 0;
+      char buf[READ_CHUNK];
 
       while (c->available() && readNow < READ_CHUNK) {
-        char buf[READ_CHUNK];
         size_t can = min((size_t)c->available(), (size_t)(READ_CHUNK - readNow));
         size_t n = c->readBytes((uint8_t*)buf, can);
         if (!n) break;
@@ -187,28 +214,27 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
       }
 
       if (!c->connected() && !c->available()) {
-        NS_LOGI("[NS] Body done (len=%u)", (unsigned)r.body.length());
+        logs::logIf("[NS] Body done (len=%u)", (unsigned)r.body.length());
         r.ph = Phase::Done;
       }
       return false;
     }
 
     case Phase::Done: {
-      // всегда прокидываем bounds на экраны
-      memcpy(out.sgvBounds, _cfg.sgvBounds, sizeof(out.sgvBounds));
+      applyBounds(_cfg, out);
 
       out.http = r.httpCode;
-      out.ok = false;
+      out.ok   = false;
 
       if (r.httpCode != 200) {
-        NS_LOGE("[NS] HTTP %d (len=%u)", r.httpCode, (unsigned)r.body.length());
+        logs::logEf("[NS] HTTP %d (len=%u)", r.httpCode, (unsigned)r.body.length());
         abortReq();
         return true;
       }
 
       sanitizeJson(r.body);
 
-      NS_LOGI("[NS] Parse v2/properties via GSON...");
+      logs::logI("[NS] Parse v2/properties via GSON...");
       if (!parseV2Properties(r.body, out)) {
         out.ok = false;
       } else {
@@ -220,9 +246,9 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
     }
 
     case Phase::Error: {
-      memcpy(out.sgvBounds, _cfg.sgvBounds, sizeof(out.sgvBounds));
+      applyBounds(_cfg, out);
       out.http = (r.httpCode ? r.httpCode : -1);
-      out.ok = false;
+      out.ok   = false;
       abortReq();
       return true;
     }
@@ -231,29 +257,32 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
     default:
       return false;
   }
-   return false;
+  return false;
 }
 
 bool NightscoutClient::tick(NightscoutData& out) {
+  // нет Wi-Fi — не делаем ничего
   if (WiFi.status() != WL_CONNECTED) return false;
 
-  // если хост уже “фатально” не коннектится — не спамим сеть
-  if (_hostError && _r.ph == Phase::Idle) {
+  const uint32_t now = millis();
+
+  // ✅ если недавно был connect fail — делаем паузу, но НЕ "вечный стоп"
+  if (_hostErrorUntilMs != 0 && now < _hostErrorUntilMs) {
     _wantUpdate = false;
     return false;
   }
 
   // старт запроса
   if (_r.ph == Phase::Idle) {
-    if (_wantUpdate && !_hostError) {
+    if (_wantUpdate) {
       _wantUpdate = false;
 
       String base = buildBase(_cfg.baseUrl);
       if (base.isEmpty()) {
-        NS_LOGE("[NS] baseUrl empty");
+        logs::logE("[NS] baseUrl empty");
         out.ok = false;
         out.http = 0;
-        memcpy(out.sgvBounds, _cfg.sgvBounds, sizeof(out.sgvBounds));
+        applyBounds(_cfg, out);
         return true;
       }
 
@@ -279,9 +308,6 @@ static bool entryToCstr(gson::Entry e, char* out, size_t outSz) {
 
 static float entryToFloatAny(gson::Entry e) {
   if (!e) return NAN;
-
-  // если это число — можно напрямую
-  // (у Entry есть type(), но даже без него можно безопасно: number тоже toStr отдаст)
   char buf[24];
   if (!entryToCstr(e, buf, sizeof(buf))) return NAN;
   return (float)atof(buf);
@@ -294,28 +320,25 @@ static int entryToIntAny(gson::Entry e, int def = 0) {
 
 bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out) const {
   gson::Parser p;
-
-  // теперь пакет маленький, но reserve всё равно ускоряет
   p.reserve(250);
 
   if (!p.parse(json) || p.hasError()) {
-    NS_LOGE("[NS] GSON parse error: %s at %d", p.readError(), p.errorIndex());
+    logs::logEf("[NS] GSON parse error: %s at %d", p.readError(), p.errorIndex());
     return false;
   }
 
-  // хешируем ключи для ускорения доступа
   p.hashKeys();
 
   // ---- bgnow ----
   gson::Entry bgnow = p.get(SH("bgnow"));
   if (!bgnow) {
-    NS_LOGE("[NS] no 'bgnow'");
+    logs::logE("[NS] no 'bgnow'");
     return false;
   }
 
   gson::Entry sgvs = bgnow.get(SH("sgvs"));
   if (!sgvs || sgvs.length() <= 0) {
-    NS_LOGE("[NS] no 'bgnow.sgvs'");
+    logs::logE("[NS] no 'bgnow.sgvs'");
     return false;
   }
 
@@ -350,7 +373,6 @@ bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out
 
   gson::Entry pump = p.get(SH("pump"));
   if (pump) {
-    // voltage
     gson::Entry pump_inner = pump.get(SH("pump"));
     if (pump_inner) {
       gson::Entry bat = pump_inner.get(SH("battery"));
@@ -359,11 +381,10 @@ bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out
         if (!isnan(v) && v > 0.0f) out.pumpBatV = v;
 
         int pct = entryToIntAny(bat.get(SH("percent")), -1);
-        if (pct > 0 && pct <= 100) out.pumpBatPct = pct;  // у тебя часто 0
+        if (pct > 0 && pct <= 100) out.pumpBatPct = pct;
       }
     }
 
-    // uploader battery (%)
     if (out.pumpBatPct < 0) {
       gson::Entry uploader = pump.get(SH("uploader"));
       if (uploader) {
@@ -373,15 +394,14 @@ bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out
     }
   }
 
-  NS_LOGI("[NS] parsed: sgv=%.1f mmol trend=%s delta=%.2f iob=%.2f cob=%.0f bat=%d%% V=%.2f t=%llu elems=%u bytes=%u",
+  logs::logIf("[NS] parsed: sgv=%.1f mmol trend=%s delta=%.2f iob=%.2f cob=%.0f bat=%d%% V=%.2f t=%llu elems=%u bytes=%u",
           out.sgv_mmol, out.trend, out.delta_mmol, out.iob, out.cob,
           out.pumpBatPct, out.pumpBatV,
           (unsigned long long)out.update_time_ms,
           (unsigned)p.length(), (unsigned)p.size());
 
-  // минимальная валидность
   if (isnan(out.sgv_mmol) || out.update_time_ms == 0) {
-    NS_LOGW("[NS] parsed but missing sgv/time");
+    logs::logW("[NS] parsed but missing sgv/time");
     return false;
   }
   return true;

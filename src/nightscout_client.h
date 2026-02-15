@@ -1,8 +1,8 @@
-// ======================= nightscout_client.h =======================
 #pragma once
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include "logs.h"
 
 // GyverGSON
 //#define GSON_NO_LIMITS
@@ -10,15 +10,15 @@
 #include <GSON.h>
 #include <StringUtils.h>   // su::SH()
 
-#ifndef NS_LOGI
-  #define NS_LOGI(...) do { Serial.printf(__VA_ARGS__); Serial.print("\n"); } while(0)
-#endif
-#ifndef NS_LOGW
-  #define NS_LOGW(...) do { Serial.printf(__VA_ARGS__); Serial.print("\n"); } while(0)
-#endif
-#ifndef NS_LOGE
-  #define NS_LOGE(...) do { Serial.printf(__VA_ARGS__); Serial.print("\n"); } while(0)
-#endif
+// #ifndef NS_LOGI
+//   #define NS_LOGI(...) do { Serial.printf(__VA_ARGS__); Serial.print("\n"); } while(0)
+// #endif
+// #ifndef NS_LOGW
+//   #define NS_LOGW(...) do { Serial.printf(__VA_ARGS__); Serial.print("\n"); } while(0)
+// #endif
+// #ifndef NS_LOGE
+//   #define NS_LOGE(...) do { Serial.printf(__VA_ARGS__); Serial.print("\n"); } while(0)
+// #endif
 
 struct NSConfig {
   // Nightscout host/site (может быть без схемы или со схемой)
@@ -27,7 +27,10 @@ struct NSConfig {
 
   bool    preferHttpsIfNoScheme = true;
   uint32_t httpTimeoutMs = 8000;
+  uint32_t hostErrorBackoffMs = 60000;
   bool    tlsInsecure = true;
+
+//  LogBuffer* logs = nullptr;
 
   // 4 границы (mmol/L) для подсветки SGV (как в AppSettings::sgvBounds)
   float sgvBounds[4] = {3.9f, 4.5f, 8.5f, 10.0f};
@@ -103,6 +106,7 @@ private:
 
   // фатальная ошибка DNS/SSL/коннекта — не спамим сеть
   bool _hostError = false;
+  uint32_t _hostErrorUntilMs = 0;   // backoff до этого времени (millis)
 
   void startReq(const String& base);
   bool stepReq(NightscoutData& out);
@@ -110,4 +114,6 @@ private:
 
   static constexpr size_t READ_CHUNK = 512;
   static constexpr size_t BODY_MAX   = 32 * 1024; // /api/v2/properties бывает жирный
+
+  // mutable LogBuffer* _logs = nullptr;
 };
