@@ -1,4 +1,9 @@
+// Выбранная яркость хранится отдельно от временного максимума во время тревоги.
 #include "backlight.h"
+
+#if defined(BOARD_M5CORE_S3)
+  #include "gfx/Display.h"
+#endif
 
 Backlight* Backlight::_self = nullptr;
 
@@ -25,6 +30,7 @@ void Backlight::setLevels(const uint8_t* levels, size_t count) {
   _idx = 0;
 }
 
+// Возвращает выбранный уровень, независимо от временного повышения яркости.
 uint8_t Backlight::currentPercent() const {
   if (!_levels || _count == 0) return 100;
   return _levels[_idx];
@@ -44,18 +50,26 @@ void Backlight::begin(const BacklightConfig& cfg) {
     setLevels(defaultLevels, sizeof(defaultLevels) / sizeof(defaultLevels[0]));
   }
 
+#if !defined(BOARD_M5CORE_S3)
   pinMode(_cfg.pin, OUTPUT);
+#endif
 
   backlightInit();
   setPercent(currentPercent());
 }
 
 void Backlight::backlightInit() {
+#if !defined(BOARD_M5CORE_S3)
   ledcSetup(_cfg.channel, _cfg.freq, _cfg.resBits);
   ledcAttachPin(_cfg.pin, _cfg.channel);
+#endif
 }
 
+// На T-Display отключаем PWM и подаём постоянный высокий уровень на подсветку.
 void Backlight::backlightForceMax() {
+#if defined(BOARD_M5CORE_S3)
+  gfx::Display::instance().set_backlight(gfx::Display::brightness_level::max);
+#else
   ledcWrite(_cfg.channel, 0);
   delay(1);
 
@@ -67,9 +81,32 @@ void Backlight::backlightForceMax() {
   delay(2);
 
   Serial.printf("FORCE MAX: gpio=%d\n", digitalRead(_cfg.pin));
+#endif
 }
 
+// Во время тревоги запоминаем выбор, но оставляем физическую подсветку на максимуме.
 void Backlight::setPercent(uint8_t percent) {
+  if (percent < 1) percent = 1;
+  if (percent > 100) percent = 100;
+  _requestedPercent = percent;
+  if (!_alarmBoost) applyPercent(percent);
+}
+
+// Меняем аппаратную яркость только при включении или снятии временного максимума.
+void Backlight::setAlarmBoost(bool active) {
+  if (_alarmBoost == active) return;
+  _alarmBoost = active;
+  applyPercent(active ? 100 : _requestedPercent);
+}
+
+void Backlight::applyPercent(uint8_t percent) {
+#if defined(BOARD_M5CORE_S3)
+  if (percent < 1) percent = 1;
+  if (percent > 100) percent = 100;
+  const uint8_t level = (uint16_t)percent * 255 / 100;
+  gfx::Display::instance().set_backlight(
+      static_cast<gfx::Display::brightness_level>(level));
+#else
   if (percent >= 100) {
     backlightForceMax();
     return;
@@ -81,6 +118,7 @@ void Backlight::setPercent(uint8_t percent) {
   ledcWrite(_cfg.channel, duty);
 
   Serial.printf("BL %u%% duty=%u/%u\n", percent, duty, _maxDuty);
+#endif
 }
 
 void Backlight::next() {
@@ -91,8 +129,9 @@ void Backlight::next() {
   setPercent(p);
 }
 
+// После загрузки выбираем ближайшую ступень яркости из доступных уровней.
 void Backlight::restoreFromPercent(uint8_t percent) {
-  // Если уровни не заданы — просто выставляем процент как есть
+
   if (!_levels || _count == 0) {
     setPercent(percent);
     return;
@@ -101,7 +140,6 @@ void Backlight::restoreFromPercent(uint8_t percent) {
   if (percent < 1)   percent = 1;
   if (percent > 100) percent = 100;
 
-  // Подбираем ближайший уровень в _levels к заданному percent
   size_t bestIdx = 0;
   uint8_t bestDiff = 255;
 
@@ -115,5 +153,5 @@ void Backlight::restoreFromPercent(uint8_t percent) {
   }
 
   _idx = bestIdx;
-  setPercent(_levels[_idx]); // это уже учтёт 100% через backlightForceMax()
+  setPercent(_levels[_idx]);
 }

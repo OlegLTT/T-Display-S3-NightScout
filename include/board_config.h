@@ -10,17 +10,16 @@
   #define PIN_BACKLIGHT     38
   #define PIN_BUTTON_A      0
   #define PIN_BUTTON_B      14
+  #define PIN_BUZZER        13
   // ... остальные пины T-Display
 
-#elif defined(BOARD_M5CORES3)
+#elif defined(BOARD_M5CORE_S3)
 
 // ------- M5CoreS3 -------
   #define BOARD_NAME        "M5CoreS3"
 
-  #define PIN_BACKLIGHT     2   // пример
-  #define PIN_BUTTON_A      37
-  #define PIN_BUTTON_B      39
-  // ... реальные пины для CoreS3
+  // Подсветкой управляет M5Unified через контроллер питания, не GPIO.
+  #define PIN_BACKLIGHT     -1
 
 #elif defined(BOARD_ESP32S3_DEV)
 // Waveshare ESP32-S3 1.43" AMOLED (ESP32-S3-Touch-AMOLED-1.43)
@@ -91,5 +90,5 @@
 #define PIN_I2C_SCL 48
 
 #else
-  #error "Не определена плата! Задай BOARD_TDISPLAY_S3 / BOARD_M5CORES3 / BOARD_ESP32S3_DEV в build_flags."
+  #error "Не определена плата! Задай BOARD_TDISPLAY_S3 / BOARD_M5CORE_S3 / BOARD_ESP32S3_DEV в build_flags."
 #endif

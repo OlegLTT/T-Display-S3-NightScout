@@ -1,3 +1,4 @@
+// Настройка часового пояса, летнего времени и серверов синхронизации часов.
 #pragma once
 #include <Arduino.h>
 #include <stdint.h>

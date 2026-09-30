@@ -1,3 +1,4 @@
+// Временная надпись с выбранной яркостью поверх текущего экрана.
 #pragma once
 #include <lvgl.h>
 #include <stdint.h>

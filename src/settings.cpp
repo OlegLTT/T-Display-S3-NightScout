@@ -1,12 +1,16 @@
+// Параметры устройства и их загрузка, сохранение и сброс в пространстве NVS appcfg.
 #include "settings.h"
 #include <nvs_flash.h>
 
-static void writeStr(Preferences& p, const char* key, const char* s, size_t maxLen) {
+// Пустое поле удаляется из NVS: putString не различает успех пустой записи и ошибку.
+static bool writeStr(Preferences& p, const char* key, const char* s, size_t maxLen) {
   if (!s) s = "";
   char tmp[128];
   size_t n = strlcpy(tmp, s, min(maxLen, sizeof(tmp)));
   (void)n;
-  p.putString(key, tmp);
+
+  if (!tmp[0]) return !p.isKey(key) || p.remove(key);
+  return p.putString(key, tmp) == strlen(tmp);
 }
 
 static void readStr(Preferences& p, const char* key, char* out, size_t maxLen, const char* def="") {
@@ -14,14 +18,10 @@ static void readStr(Preferences& p, const char* key, char* out, size_t maxLen, c
   strlcpy(out, v.c_str(), maxLen);
 }
 
-// bool SettingsStore::begin() {
-//   return _prefs.begin("appcfg", false); // RW
-// }
-
 bool SettingsStore::begin() {
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    // NVS битый/несовместим — стираем и инициализируем заново
+
     nvs_flash_erase();
     err = nvs_flash_init();
   }
@@ -36,7 +36,7 @@ void SettingsStore::end() {
 }
 
 bool SettingsStore::load(AppSettings& out) {
-  // WiFi slots
+
   for (int i = 0; i < MAX_WIFI; i++) {
     char k1[16], k2[16];
     snprintf(k1, sizeof(k1), "w%d_ssid", i);
@@ -49,16 +49,14 @@ bool SettingsStore::load(AppSettings& out) {
   out.dstEnable = _prefs.getBool("dst", false);
 
   out.lastUiScreen = _prefs.getUChar("uiScr", 0);
-  if (out.lastUiScreen > 1) out.lastUiScreen = 0; // только 0/1
+  if (out.lastUiScreen > 1) out.lastUiScreen = 0;
 
-  // границы SGV
   for (int i = 0; i < 4; i++) {
     char k[12];
     snprintf(k, sizeof(k), "b%d", i);
     out.sgvBounds[i] = _prefs.getFloat(k, out.sgvBounds[i]);
   }
 
-  // если кто-то записал мусор — вернём дефолт
   if (!out.isValidBounds()) {
     out.sgvBounds[0] = 3.9f;
     out.sgvBounds[1] = 4.5f;
@@ -66,13 +64,16 @@ bool SettingsStore::load(AppSettings& out) {
     out.sgvBounds[3] = 10.0f;
   }
 
-  // host site
   readStr(_prefs, "host", out.hostSite, sizeof(out.hostSite), "");
 
-  // онбординг
   out.onboardingDone = _prefs.getBool("onbDone", false);
+  out.alarmVolume = _prefs.getUChar("alarmVolume", 31);
+  if (out.alarmVolume > 100) out.alarmVolume = 100;
 
-  // яркость подсветки (проценты 1..100, по умолчанию 100)
+  // Совместимость со старыми настройками: любое включённое условие включает общую тревогу.
+  out.soundAlarmEnabled = _prefs.getBool("alarmEnable", false)
+      || _prefs.getBool("missingAlarm", false);
+
   out.brightness = _prefs.getUChar("br", out.brightness);
   if (out.brightness < 1 || out.brightness > 100) {
     out.brightness = 100;
@@ -81,57 +82,52 @@ bool SettingsStore::load(AppSettings& out) {
   return true;
 }
 
+// Возвращает ошибку при неудачной записи. Сохранение отдельных ключей не является транзакцией.
 bool SettingsStore::save(const AppSettings& s) {
-  // WiFi slots
+  bool ok = true;
+
   for (int i = 0; i < MAX_WIFI; i++) {
     char k1[16], k2[16];
     snprintf(k1, sizeof(k1), "w%d_ssid", i);
     snprintf(k2, sizeof(k2), "w%d_pass", i);
-    writeStr(_prefs, k1, s.wifi[i].ssid, sizeof(s.wifi[i].ssid));
-    writeStr(_prefs, k2, s.wifi[i].pass, sizeof(s.wifi[i].pass));
+    ok = writeStr(_prefs, k1, s.wifi[i].ssid, sizeof(s.wifi[i].ssid)) && ok;
+    ok = writeStr(_prefs, k2, s.wifi[i].pass, sizeof(s.wifi[i].pass)) && ok;
   }
 
-  _prefs.putShort("tzMin", s.tzMinutes);
-  _prefs.putBool("dst", s.dstEnable);
+  ok = (_prefs.putShort("tzMin", s.tzMinutes) > 0) && ok;
+  ok = (_prefs.putBool("dst", s.dstEnable) > 0) && ok;
 
   uint8_t ui = s.lastUiScreen;
   if (ui > 1) ui = 0;
-  _prefs.putUChar("uiScr", ui);
+  ok = (_prefs.putUChar("uiScr", ui) > 0) && ok;
 
   for (int i = 0; i < 4; i++) {
     char k[12];
     snprintf(k, sizeof(k), "b%d", i);
-    _prefs.putFloat(k, s.sgvBounds[i]);
+    ok = (_prefs.putFloat(k, s.sgvBounds[i]) > 0) && ok;
   }
 
-  // host site
-  writeStr(_prefs, "host", s.hostSite, sizeof(s.hostSite));
+  ok = writeStr(_prefs, "host", s.hostSite, sizeof(s.hostSite)) && ok;
 
-  // онбординг
-  _prefs.putBool("onbDone", s.onboardingDone);
+  ok = (_prefs.putBool("onbDone", s.onboardingDone) > 0) && ok;
+  ok = (_prefs.putBool("alarmEnable", s.soundAlarmEnabled) > 0) && ok;
+  ok = (_prefs.putUChar("alarmVolume", s.alarmVolume) > 0) && ok;
+  if (ok && _prefs.isKey("missingAlarm")) ok = _prefs.remove("missingAlarm");
 
-  // яркость подсветки
-  _prefs.putUChar("br", s.brightness);
+  ok = (_prefs.putUChar("br", s.brightness) > 0) && ok;
 
-  return true;
+  return ok;
 }
 
+// После очистки NVS используются те же значения по умолчанию, что при первом запуске.
 bool SettingsStore::factoryReset(AppSettings& out) {
-  // полностью очищаем NVS-namespace "appcfg"
-  _prefs.clear();
 
-  // сбрасываем структуру настроек к дефолту
-  out = AppSettings();  // использует значения по умолчанию из struct AppSettings
+  if (!_prefs.clear()) return false;
 
-  // при необходимости можно явно задать дефолтные границы, если в struct не заданы
-  out.sgvBounds[0] = 3.9f;
-  out.sgvBounds[1] = 4.5f;
-  out.sgvBounds[2] = 9.f;
-  out.sgvBounds[3] = 11.f;
+  out = AppSettings();
 
   out.onboardingDone = false;
 
-  // сохраняем дефолтные настройки в NVS, чтобы всё было консистентно
   return save(out);
 }
 

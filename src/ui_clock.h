@@ -1,3 +1,4 @@
+// Экран часов: время, дата, глюкоза и тренд; цвет учитывает возраст данных.
 #pragma once
 #include <lvgl.h>
 #include "nightscout_client.h"

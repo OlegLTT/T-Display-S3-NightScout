@@ -1,10 +1,13 @@
+// Дисплей ST7789 по шине i80 и пассивный buzzer T-Display S3 на GPIO13.
+#include "board_config.h"
+
+#if defined(BOARD_TDISPLAY_S3)
 #include "BoardDisplay_TDisplayS3.h"
 #include <Arduino.h>
+#include <esp_timer.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
-//#include <esp_lcd_i80_bus.h>
 
-// ====== PINOUT (T-Display S3 i80 8-bit) ======
 #define PIN_TFT_WR    8
 #define PIN_TFT_RD    9
 #define PIN_TFT_RS    7
@@ -21,25 +24,82 @@
 #define PIN_TFT_CS    6
 #define PIN_TFT_RST   5
 #define PIN_BACKLIGHT 38
-// ================================================
 
-// может быть 170x320 или уже повернуто 320x170.
-// С учётом swap_xy(true) в референсе — обычно LVGL удобнее 320x170.
 static constexpr uint16_t LCD_W = 320;
 static constexpr uint16_t LCD_H = 170;
 
 namespace gfx {
+
+namespace {
+
+// Канал 2 использует другой таймер LEDC, чем подсветка на канале 7.
+constexpr int buzzerChannel = 2;
+esp_timer_handle_t buzzerStopTimer = nullptr;
+
+// Одноразовый esp_timer завершает писк независимо от скорости основного цикла.
+void stopBuzzer(void*) { ledcWriteTone(buzzerChannel, 0); }
+}
+
+void BoardDisplay_TDisplayS3::set_alarm_volume(uint8_t percent) {
+    m_alarm_volume = percent > 100 ? 100 : percent;
+}
+
+// PWM запускается без ожидания; два писка по 180 мс разделены паузой, затем следует длинная пауза.
+void BoardDisplay_TDisplayS3::set_alarm_sound(bool active) {
+    static bool initialized = false;
+    static bool wasActive = false;
+    static bool secondBeep = false;
+    static uint32_t lastBeep = 0;
+    if (!initialized) {
+        initialized = true;
+        esp_timer_create_args_t args = {};
+        args.callback = stopBuzzer;
+        args.name = "buzzer_stop";
+        m_sound_available = ledcSetup(buzzerChannel, 1800, 8) > 0
+            && esp_timer_create(&args, &buzzerStopTimer) == ESP_OK;
+        if (!m_sound_available) return;
+        ledcAttachPin(PIN_BUZZER, buzzerChannel);
+        ledcWriteTone(buzzerChannel, 0);
+    }
+    if (!m_sound_available) return;
+    const uint32_t now = millis();
+    active = active && m_alarm_volume > 0;
+    if (!active) {
+        if (wasActive) {
+            esp_timer_stop(buzzerStopTimer);
+            stopBuzzer(nullptr);
+        }
+        wasActive = false;
+        return;
+    }
+    if (!wasActive) {
+        secondBeep = false;
+        lastBeep = now - 4000;
+        wasActive = true;
+    }
+    if (uint32_t(now - lastBeep) < (secondBeep ? 360U : 4000U)) return;
+    esp_timer_stop(buzzerStopTimer);
+    ledcWriteTone(buzzerChannel, 1800);
+
+    // ledcWriteTone задаёт 10-битное разрешение; заполнение до 50% регулирует громкость пассивного buzzer.
+    ledcWrite(buzzerChannel, (uint32_t(m_alarm_volume) * 511 + 99) / 100);
+    if (esp_timer_start_once(buzzerStopTimer, 180000) != ESP_OK) {
+        stopBuzzer(nullptr);
+        m_sound_available = false;
+    }
+    lastBeep = now;
+    secondBeep = !secondBeep;
+}
 
 BoardDisplay_TDisplayS3  BoardDisplay_TDisplayS3 ::s_instance;
 
 BoardDisplay_TDisplayS3& BoardDisplay_TDisplayS3::instance() { return s_instance;}
 
 BoardDisplay_TDisplayS3 ::BoardDisplay_TDisplayS3 () {
-    // RD держим HIGH (если не читаем)
+
     pinMode(PIN_TFT_RD, OUTPUT);
     digitalWrite(PIN_TFT_RD, HIGH);
 
-    // i80 bus
     esp_lcd_i80_bus_config_t bus_config = {};
     bus_config.dc_gpio_num = PIN_TFT_RS;
     bus_config.wr_gpio_num = PIN_TFT_WR;
@@ -53,11 +113,10 @@ BoardDisplay_TDisplayS3 ::BoardDisplay_TDisplayS3 () {
     bus_config.data_gpio_nums[6] = PIN_TFT_D6;
     bus_config.data_gpio_nums[7] = PIN_TFT_D7;
     bus_config.bus_width = 8;
-    bus_config.max_transfer_bytes = LCD_W * 40 * sizeof(uint16_t); // 40 строк буфера
+    bus_config.max_transfer_bytes = LCD_W * 40 * sizeof(uint16_t);
 
     ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&bus_config, &m_bus_handle));
 
-    // transfer done callback -> прокидываем наружу
     auto on_transfer_done = [](esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*, void* user_ctx) -> bool {
         auto d = static_cast<BoardDisplay_TDisplayS3 *>(user_ctx);
         if (d->m_on_transfer_done_callback) {
@@ -68,7 +127,7 @@ BoardDisplay_TDisplayS3 ::BoardDisplay_TDisplayS3 () {
 
     esp_lcd_panel_io_i80_config_t io_config = {};
     io_config.cs_gpio_num = PIN_TFT_CS;
-    io_config.pclk_hz = 20 * 1000 * 1000; // старт 20MHz
+    io_config.pclk_hz = 20 * 1000 * 1000;
     io_config.trans_queue_depth = 10;
     io_config.on_color_trans_done = on_transfer_done;
     io_config.user_ctx = this;
@@ -81,7 +140,6 @@ BoardDisplay_TDisplayS3 ::BoardDisplay_TDisplayS3 () {
 
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(m_bus_handle, &io_config, &m_io_handle));
 
-    // ST7789
     esp_lcd_panel_dev_config_t dev_config = {};
     dev_config.reset_gpio_num = PIN_TFT_RST;
     dev_config.color_space = ESP_LCD_COLOR_SPACE_RGB;
@@ -91,13 +149,11 @@ BoardDisplay_TDisplayS3 ::BoardDisplay_TDisplayS3 () {
     ESP_ERROR_CHECK(esp_lcd_panel_reset(m_panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(m_panel_handle));
 
-    // Обычно для T-Display S3 нужно:
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(m_panel_handle, true));
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(m_panel_handle, true));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(m_panel_handle, false, true));
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(m_panel_handle, 0, 35));
 
-    // Backlight
     pinMode(PIN_BACKLIGHT, OUTPUT);
     set_backlight(brightness_level::max);
 }
@@ -120,4 +176,6 @@ void BoardDisplay_TDisplayS3::draw_bitmap(uint16_t x1, uint16_t y1, uint16_t x2,
     esp_lcd_panel_draw_bitmap(m_panel_handle, x1, y1, x2 + 1, y2 + 1, data);
 }
 
-} // namespace gfx
+}
+
+#endif

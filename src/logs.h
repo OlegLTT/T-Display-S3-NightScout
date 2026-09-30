@@ -1,4 +1,4 @@
-// ===== logs.h =====
+// Кольцевой буфер сообщений и вывод журнала в Serial и на экран.
 #pragma once
 #include <Arduino.h>
 #include <stdarg.h>
@@ -16,15 +16,13 @@ public:
     LogLevel level;
     uint32_t seq;
 
-    // seconds: epoch if ts_is_real, else uptime seconds
     uint32_t ts;
-    // true=real time (epoch), false=uptime
+
     bool     ts_is_real;
 
     char msg[MSG_LEN];
   };
 
-  // Добавление записи с уже посчитанным временем (чтобы не считать/форматировать 2 раза)
   void addWithTs(LogLevel lvl, uint32_t ts, bool ts_is_real, const char* s) {
     Entry& e = _buf[_head];
     e.level = lvl;
@@ -39,7 +37,6 @@ public:
     _version++;
   }
 
-  // Старый API оставляем: сам считает время и кладёт в буфер (можно использовать где-то ещё)
   void add(LogLevel lvl, const char* s) {
     time_t now = time(nullptr);
     uint32_t ts;

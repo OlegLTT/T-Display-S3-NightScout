@@ -1,5 +1,6 @@
-// ui_main.cpp
+// Основной экран: глюкоза, тренд, время, возраст данных и заряд загрузчика.
 #include "ui_main.h"
+#include "ui_layout.h"
 #include "ui_ns_view.h"
 #include "ui_ns_cache.h"
 #include "fonts.h"
@@ -11,17 +12,13 @@
 #include <ctime>
 #include <cstddef>
 
-
 static NsUiCache g_cache;
 
-// ======================================================
-//                     LVGL handles
-// ======================================================
 static lv_obj_t *label_time          = nullptr;
 static lv_obj_t *label_bg            = nullptr;
 static lv_obj_t *label_iob           = nullptr;
 static lv_obj_t *label_cob           = nullptr;
-static lv_obj_t *label_trend         = nullptr;   // резерв
+static lv_obj_t *label_trend         = nullptr;
 static lv_obj_t *label_delta         = nullptr;
 static lv_obj_t *label_battery       = nullptr;
 static lv_obj_t *label_battery_level = nullptr;
@@ -29,9 +26,6 @@ static lv_obj_t *label_age           = nullptr;
 
 static lv_obj_t *main_screen = nullptr;
 
-// ======================================================
-//                     Arrow(s) (trend)
-// ======================================================
 static const lv_point_precise_t arrow_points[] = {
     {0, 15}, {60, 15}, {48, 3}, {60, 15}, {48, 27}
 };
@@ -39,11 +33,9 @@ static const lv_point_precise_t arrow_points[] = {
 static lv_obj_t* arrows[3] = {nullptr, nullptr, nullptr};
 static int32_t   arrow_angle10_raw = 0;
 
-// базовый центр вращения (в координатах экрана)
 static int32_t g_arrow_cx = 0;
 static int32_t g_arrow_cy = 0;
 
-// bbox линии (60x30), pivot (30,15)
 static constexpr int32_t AR_PX = 30;
 static constexpr int32_t AR_PY = 15;
 static constexpr float   AR_GAP = 10.0f;
@@ -89,6 +81,7 @@ static void arrows_apply_layout(int32_t angle_deg, int count) {
     }
 }
 
+// Угол задаётся в десятых долях градуса; анимация выбирает путь поворота через правое направление.
 static void arrow_set_angle_deg_via_right(int32_t target_deg, uint32_t time_ms) {
     if (!arrows[0]) return;
 
@@ -120,10 +113,10 @@ static void arrow_set_angle_deg_via_right(int32_t target_deg, uint32_t time_ms) 
     }
 }
 
+// Текст и цвета обновляются через кеш; стрелки перестраиваются при изменении тренда.
 void main_update_full(const NightscoutData& ns) {
   if (!label_bg) return;
 
-  // 1) Сначала — время (оно не зависит от Nightscout)
   if (label_time) {
     tm tml;
     if (getLocalTime(&tml, 10)) {
@@ -133,10 +126,10 @@ void main_update_full(const NightscoutData& ns) {
     }
   }
 
-  // 2) Общая логика NS (sgv/delta/age/colors/arrows)
   const NsUiView v = ns_make_view(ns);
 
   ui_set_label_if_changed(label_bg, v.sgv, g_cache.sgv, sizeof(g_cache.sgv));
+  ui_layout::fit_beside_alarm(label_bg, 230, 10);
   ui_set_color_if_changed(label_bg, v.zoneCol, &g_cache.zoneCol);
 
   ui_set_label_if_changed(label_delta, v.delta, g_cache.delta, sizeof(g_cache.delta));
@@ -144,7 +137,6 @@ void main_update_full(const NightscoutData& ns) {
 
   ui_set_label_if_changed(label_age, v.age, g_cache.age, sizeof(g_cache.age));
 
-  // 3) IOB/COB (на main-экране их раньше вообще не обновляли)
   if (label_iob) {
     char s[16] = "I: --";
     if (!v.stale && std::isfinite(ns.iob)) std::snprintf(s, sizeof(s), "I: %.2f", ns.iob);
@@ -156,19 +148,17 @@ void main_update_full(const NightscoutData& ns) {
     ui_set_label_if_changed(label_cob, s, g_cache.cob, sizeof(g_cache.cob));
   }
 
-  // 4) Battery
   if (label_battery_level) {
     ui_set_label_if_changed(label_battery_level, v.bat[0] ? v.bat : "--%", g_cache.bat, sizeof(g_cache.bat));
   }
   if (label_battery) {
-    lv_label_set_text(label_battery, ns_battery_icon_for_pct(ns.pumpBatPct));
+    lv_label_set_text(label_battery, ns_battery_icon_for_pct(ns.uploaderBatPct));
     ui_set_color_if_changed(label_battery, v.batCol, &g_cache.batCol);
   }
   if (label_battery_level) {
     lv_obj_set_style_text_color(label_battery_level, v.batCol, LV_PART_MAIN);
   }
 
-  // 5) Arrows
   if (g_cache.angleDeg != v.angleDeg || g_cache.arrowCount != v.arrowCount || ui_str_changed(g_cache.trend, v.trend)) {
     std::strncpy(g_cache.trend, v.trend, sizeof(g_cache.trend));
     g_cache.trend[sizeof(g_cache.trend) - 1] = '\0';
@@ -181,32 +171,24 @@ void main_update_full(const NightscoutData& ns) {
   }
 }
 
-
-// ======================================================
-//                     ui_main_create
-// ======================================================
 lv_obj_t *ui_main_create() {
     main_screen = lv_obj_create(nullptr);
+    ui_layout::prepare_screen(main_screen);
     lv_obj_clear_flag(main_screen, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(main_screen, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(main_screen, LV_OPA_COVER, LV_PART_MAIN);
 
-    // ---------- Arrow(s) ----------
-    int32_t PX = 320 - 40, PY = 170 - 40;
+    int32_t PX = ui_layout::content_width() - 40;
+    int32_t PY = ui_layout::content_height() - 40;
     g_arrow_cx = PX;
     g_arrow_cy = PY;
-
-    // // где будет центр вращения
-    // int32_t PX = 320 - 40, PY = 170 - 40;
-    // lv_obj_set_pos(arrow, PX - 30, PY - 15);
-
 
     for (int i = 0; i < 3; i++) {
         arrows[i] = lv_line_create(main_screen);
         lv_line_set_points(arrows[i], arrow_points, sizeof(arrow_points) / sizeof(arrow_points[0]));
         lv_obj_set_style_line_width(arrows[i], 8, LV_PART_MAIN);
         lv_obj_set_style_line_rounded(arrows[i], true, LV_PART_MAIN);
-        lv_obj_set_style_line_color(arrows[i], lv_color_hex(0xFF0000), LV_PART_MAIN);
+        lv_obj_set_style_line_color(arrows[i], lv_color_hex(0x71FFFF), LV_PART_MAIN);
 
         lv_obj_set_style_transform_pivot_x(arrows[i], AR_PX, LV_PART_MAIN);
         lv_obj_set_style_transform_pivot_y(arrows[i], AR_PY, LV_PART_MAIN);
@@ -214,38 +196,32 @@ lv_obj_t *ui_main_create() {
         lv_obj_set_pos(arrows[i], PX - AR_PX, PY - AR_PY);
     }
 
-    // стартовый угол
     arrow_angle10_raw = -900;
     for (int i = 0; i < 3; i++) {
         lv_obj_set_style_transform_angle(arrows[i], arrow_angle10_raw, LV_PART_MAIN);
     }
 
-    // по умолчанию: 1 стрелка
     arrows_apply_layout(0, 1);
 
-    // ---------- BG ----------
     label_bg = lv_label_create(main_screen);
     lv_obj_set_style_text_color(label_bg, lv_color_hex(0xFFFF00), LV_PART_MAIN);
     lv_obj_set_style_text_font(label_bg, &roninset2_180, LV_PART_MAIN);
     lv_label_set_text(label_bg, "-.-");
     lv_obj_align(label_bg, LV_ALIGN_CENTER, -40, 10);
+    ui_layout::fit_beside_alarm(label_bg, 230, 10);
 
-    // ---------- IOB ----------
     label_iob = lv_label_create(main_screen);
     lv_obj_set_style_text_color(label_iob, lv_color_make(200, 200, 200), LV_PART_MAIN);
     lv_obj_set_style_text_font(label_iob, &comfortaa_bold_18, LV_PART_MAIN);
     lv_label_set_text(label_iob, "I: --");
     lv_obj_align(label_iob, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
-    // ---------- COB ----------
     label_cob = lv_label_create(main_screen);
     lv_obj_set_style_text_color(label_cob, lv_color_make(200, 200, 200), LV_PART_MAIN);
     lv_obj_set_style_text_font(label_cob, &comfortaa_bold_18, LV_PART_MAIN);
     lv_label_set_text(label_cob, "C: --");
     lv_obj_align(label_cob, LV_ALIGN_BOTTOM_LEFT, 120, 0);
 
-    // ---------- Delta ----------
-    // якорь 1x1 в центре стрелки
     lv_obj_t * arrow_anchor = lv_obj_create(main_screen);
     lv_obj_set_size(arrow_anchor, 1, 1);
     lv_obj_set_pos(arrow_anchor, PX, PY);
@@ -256,30 +232,25 @@ lv_obj_t *ui_main_create() {
     lv_obj_set_style_text_font(label_delta, &volkswagen_medium_36, LV_PART_MAIN);
     lv_label_set_text(label_delta, "--");
     lv_obj_align_to(label_delta, arrow_anchor, LV_ALIGN_OUT_TOP_RIGHT, 0, -40);
-   // lv_obj_align(label_delta, LV_ALIGN_RIGHT_MID, 0, 0);
 
-    // ---------- Battery icon ----------
     label_battery = lv_label_create(main_screen);
     lv_obj_set_style_text_color(label_battery, lv_color_make(160, 160, 160), LV_PART_MAIN);
     lv_obj_set_style_text_font(label_battery, &lv_font_montserrat_24, LV_PART_MAIN);
     lv_label_set_text(label_battery, "\uF242");
     lv_obj_align(label_battery, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // ---------- Battery % ----------
     label_battery_level = lv_label_create(main_screen);
     lv_obj_set_style_text_color(label_battery_level, lv_color_make(160, 160, 160), LV_PART_MAIN);
     lv_obj_set_style_text_font(label_battery_level, &comfortaa_bold_18, LV_PART_MAIN);
     lv_label_set_text(label_battery_level, "--%");
     lv_obj_align_to(label_battery_level, label_battery, LV_ALIGN_OUT_RIGHT_MID, 2, 0);
 
-    // ---------- Age ----------
     label_age = lv_label_create(main_screen);
     lv_obj_set_style_text_color(label_age, lv_color_make(0, 255, 0), LV_PART_MAIN);
     lv_obj_set_style_text_font(label_age, &comfortaa_bold_18, LV_PART_MAIN);
     lv_label_set_text(label_age, "--");
     lv_obj_align(label_age, LV_ALIGN_TOP_RIGHT, 0, 0);
 
-    // ---------- Time ----------
     label_time = lv_label_create(main_screen);
     lv_obj_set_style_text_color(label_time, lv_color_make(200, 200, 200), LV_PART_MAIN);
     lv_obj_set_style_text_font(label_time, &comfortaa_bold_18, LV_PART_MAIN);

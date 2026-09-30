@@ -1,8 +1,8 @@
+// Кеш отображаемых значений: надписи и цвета обновляются только при изменении.
 #pragma once
 #include <lvgl.h>
-#include <cstddef>   // size_t
+#include <cstddef>
 
-// ---------- helpers ----------
 bool ui_str_changed(const char* a, const char* b);
 
 void ui_set_label_if_changed(lv_obj_t* lbl,
@@ -14,15 +14,11 @@ void ui_set_color_if_changed(lv_obj_t* obj,
                              lv_color_t c,
                              lv_color_t* cache);
 
-// battery helpers (вынесенные из ui_main)
 const char* ns_battery_icon_for_pct(int pct);
 lv_color_t  ns_battery_color_for_pct(int pct);
 
-// ======================================================
-//                  NsUiCache (expanded)
-// ======================================================
 struct NsUiCache {
-  // --- Text caches ---
+
   char sgv[16]   = "";
   char delta[16] = "";
   char age[16]   = "";
@@ -33,26 +29,22 @@ struct NsUiCache {
   char iob[16]   = "";
   char cob[16]   = "";
 
-  char bat[16]   = "";    // "20%"
-  char trend[24] = "";    // "Flat", "FortyFiveDown", ...
+  char bat[16]   = "";
+  char trend[24] = "";
 
-  // --- Numeric caches ---
   float sgv_mmol;
   float delta_mmol;
   float iob_val;
   float cob_val;
   int   batPct;
 
-  // --- Color caches ---
   lv_color_t zoneCol;
   lv_color_t deltaCol;
   lv_color_t batCol;
 
-  // --- Arrow caches ---
   int angleDeg;
   int arrowCount;
 
-  // --- Stale/age category caches ---
   bool stale;
   int  ageCat;
 

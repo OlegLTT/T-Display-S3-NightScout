@@ -1,0 +1,55 @@
+#include "BoardDisplay_CoreS3.h"
+
+#include <Arduino.h>
+#include <M5Unified.h>
+
+static constexpr uint16_t LCD_W = 320;
+static constexpr uint16_t LCD_H = 240;
+
+namespace gfx {
+
+BoardDisplay_CoreS3 BoardDisplay_CoreS3::s_instance;
+BoardDisplay_CoreS3& BoardDisplay_CoreS3::instance() { return s_instance; }
+
+BoardDisplay_CoreS3::BoardDisplay_CoreS3() {
+  // Инициализация M5Unified
+  auto cfg = M5.config();
+  // cfg.serial_baudrate = 115200;  // опционально
+  M5.begin(cfg);
+
+  // Можно сразу выставить ориентацию, если нужно:
+  // M5.Display.setRotation(1); // 0..3 (подберём по картинке)
+
+  set_backlight(brightness_level::max);
+}
+
+BoardDisplay_CoreS3::~BoardDisplay_CoreS3() {}
+
+uint16_t BoardDisplay_CoreS3::width() const  { return LCD_W; }
+uint16_t BoardDisplay_CoreS3::height() const { return LCD_H; }
+
+void BoardDisplay_CoreS3::set_backlight(brightness_level level) {
+  // CoreS3 подсветка через PMU, M5Unified это умеет
+  M5.Display.setBrightness((uint8_t)level);
+}
+
+void BoardDisplay_CoreS3::set_transfer_done_callback(transfer_done_callback_t cb, void* user_data) {
+  m_on_transfer_done_callback = cb;
+  m_on_transfer_done_user_data = user_data;
+}
+
+void BoardDisplay_CoreS3::draw_bitmap(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t* data) {
+  const uint16_t w = (x2 - x1 + 1);
+  const uint16_t h = (y2 - y1 + 1);
+
+  // Важное: LVGL даёт RGB565 в памяти. M5.Display.pushImage ждёт RGB565.
+  // Обычно байт-свап НЕ нужен. Если будут “красный/синий местами” — решим.
+  M5.Display.pushImage((int32_t)x1, (int32_t)y1, (int32_t)w, (int32_t)h, data);
+
+  // Для совместимости с твоей схемой "transfer done"
+  if (m_on_transfer_done_callback) {
+    m_on_transfer_done_callback(m_on_transfer_done_user_data);
+  }
+}
+
+} // namespace gfx

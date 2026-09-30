@@ -1,3 +1,4 @@
+// Дисплей ST7789 по шине i80 и пассивный buzzer T-Display S3 на GPIO13.
 #pragma once
 #include <cstdint>
 #include <esp_lcd_panel_io.h>
@@ -9,18 +10,22 @@ public:
     using transfer_done_callback_t = void (*)(void*);
     enum class brightness_level : uint8_t { min = 0, max = 255 };
 
-    static BoardDisplay_TDisplayS3& instance();   
-   // static BoardDisplay_TDisplayS3& get() { return instance(); } // совместимость
+    static BoardDisplay_TDisplayS3& instance();
 
     uint16_t width()  const;
     uint16_t height() const;
 
     void set_backlight(brightness_level level);
+    void set_alarm_sound(bool active);
+    void set_alarm_volume(uint8_t percent);
+    bool alarm_sound_available() const { return m_sound_available; }
     void set_transfer_done_callback(transfer_done_callback_t cb, void* user_data);
 
     void draw_bitmap(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t* data);
 
 private:
+    uint8_t m_alarm_volume = 31;
+    bool m_sound_available = true;
     BoardDisplay_TDisplayS3();
     ~BoardDisplay_TDisplayS3();
 
@@ -37,4 +42,4 @@ private:
     void*                      m_on_transfer_done_user_data = nullptr;
 };
 
-} // namespace gfx
+}

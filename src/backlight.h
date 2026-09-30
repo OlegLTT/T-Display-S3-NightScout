@@ -1,3 +1,4 @@
+// Выбранная яркость хранится отдельно от временного максимума во время тревоги.
 #pragma once
 #include <Arduino.h>
 #include "board_config.h"
@@ -11,24 +12,27 @@ struct BacklightConfig {
 
 class Backlight {
 public:
-  // ===== Instance API (нормальный) =====
+
   void setLevels(const uint8_t* levels, size_t count);
   void begin();
   void begin(const BacklightConfig& cfg);
   void setPercent(uint8_t percent);
+  void setAlarmBoost(bool active);
   void next();
   uint8_t currentPercent() const;
 
-  // ===== Static API (как раньше) =====
-  static void Use(Backlight& instance);   // зарегистрировать "глобальный" экземпляр
-  static void beginStatic();              // begin() через зарегистрированный экземпляр
-  static void nextStatic();               // next()  через зарегистрированный экземпляр
-  static uint8_t currentPercentStatic();  // currentPercent() через зарегистрированный экземпляр
+  static void Use(Backlight& instance);
+  static void beginStatic();
+  static void nextStatic();
+  static uint8_t currentPercentStatic();
   static void setPercentStatic(uint8_t p);
 
-  void restoreFromPercent(uint8_t percent);  // подобрать ближайший уровень и выставить
+  void restoreFromPercent(uint8_t percent);
 
 private:
+  void applyPercent(uint8_t percent);
+  uint8_t _requestedPercent = 100;
+  bool _alarmBoost = false;
   void backlightInit();
   void backlightForceMax();
 

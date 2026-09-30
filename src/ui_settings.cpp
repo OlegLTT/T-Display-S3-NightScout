@@ -1,26 +1,16 @@
+// Экран подключения к веб-настройкам: реквизиты Wi-Fi и QR-коды сети и адреса портала.
 #include "ui_settings.h"
+#include "ui_layout.h"
 #include "fonts.h"
 
 #include <cstring>
 #include <cstdio>
 
-#include "captive_portal.h"   // чтобы видеть CaptivePortal::apSsid/apPass/apIP
+#include "captive_portal.h"
 #include <IPAddress.h>
 
-// #if __has_include("lv_qrcode.h")
-//   #include "lv_qrcode.h"
-// #elif __has_include("src/libs/qrcode/lv_qrcode.h")
 #include <lvgl.h>
   #include "src/libs/qrcode/lv_qrcode.h"
-// #elif __has_include("lvgl/src/libs/qrcode/lv_qrcode.h")
-//   #include "lvgl/src/libs/qrcode/lv_qrcode.h"
-// #else
-//   #error "LVGL QRCode header not found. Check LVGL library/port."
-// #endif
-
-// ================= Layout =================
-static constexpr int W = 320;
-static constexpr int H = 170;
 
 static constexpr int margin = 6;
 static constexpr int gap    = 6;
@@ -28,7 +18,6 @@ static constexpr int gap    = 6;
 static constexpr int qrBig   = 104;
 static constexpr int qrSmall = 64;
 
-// ================= LVGL objects =================
 static lv_obj_t* settings_screen = nullptr;
 
 static lv_obj_t* qr_wifi = nullptr;
@@ -43,11 +32,10 @@ static lv_obj_t* label_l2a   = nullptr;
 static lv_obj_t* label_l2b   = nullptr;
 static lv_obj_t* label_url   = nullptr;
 
-// ================= Caches =================
 static char lastWifiPayload[320] = {0};
 static char lastUrlPayload[32]   = {0};
 
-// ================= Helpers =================
+// Экранируем специальные символы SSID и пароля для формата Wi-Fi QR.
 static void wifiEscape(const char* in, char* out, size_t outLen) {
   if (!out || outLen == 0) return;
   size_t w = 0;
@@ -76,44 +64,35 @@ static void set_label_text_safe(lv_obj_t* lbl, const char* txt) {
   lv_label_set_text(lbl, txt ? txt : "");
 }
 
+// Пересоздаём содержимое QR только при изменении строки данных.
 static void update_qr_if_changed(lv_obj_t* qr, const char* payload,
                                 char* lastBuf, size_t lastCap) {
   if (!qr || !payload || !lastBuf || lastCap == 0) return;
 
-  if (strncmp(payload, lastBuf, lastCap) == 0) return; // не менялось
+  if (strncmp(payload, lastBuf, lastCap) == 0) return;
 
-  // обновим кеш
   strlcpy(lastBuf, payload, lastCap);
 
-  // обновим QR
   lv_qrcode_set_data(qr, payload);
 }
 
-// ================= Public API =================
 lv_obj_t* ui_settings_create() {
-  // Screen
-  settings_screen = lv_obj_create(nullptr);
+  const int W = ui_layout::content_width();
+  const int H = ui_layout::content_height(false);
 
-// lv_obj_remove_style_all(settings_screen);
+  settings_screen = lv_obj_create(nullptr);
+  ui_layout::prepare_screen(settings_screen, false);
+
 lv_obj_set_style_bg_color(settings_screen, lv_color_black(), LV_PART_MAIN);
 lv_obj_set_style_bg_opa(settings_screen, LV_OPA_COVER, LV_PART_MAIN);
 lv_obj_clear_flag(settings_screen, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_set_size(settings_screen, W, H);
+  lv_obj_set_size(settings_screen, W, lv_display_get_vertical_resolution(nullptr));
   lv_obj_set_style_bg_color(settings_screen, lv_color_black(), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(settings_screen, LV_OPA_COVER, LV_PART_MAIN);
   lv_obj_clear_flag(settings_screen, LV_OBJ_FLAG_SCROLLABLE);
 
-// lv_obj_t* border = lv_obj_create(settings_screen);
-// lv_obj_remove_style_all(border);
-// lv_obj_set_style_border_width(border, 1, 0);
-// lv_obj_set_style_border_color(border, lv_color_white(), 0);
-// lv_obj_set_style_bg_opa(border, LV_OPA_TRANSP, 0);
-// lv_obj_set_size(border, 320, 170);
-// lv_obj_set_pos(border, 0, 0);
-
-
-  // ----- Big WiFi QR (top-left) -----
+  // Большой QR подключает телефон к Wi-Fi устройства.
   const int qr1X = margin;
   const int qr1Y = margin + 18;
 
@@ -121,14 +100,12 @@ lv_obj_clear_flag(settings_screen, LV_OBJ_FLAG_SCROLLABLE);
 lv_qrcode_set_size(qr_wifi, qrBig);
 lv_qrcode_set_dark_color(qr_wifi, lv_color_black());
 lv_qrcode_set_light_color(qr_wifi, lv_color_white());
-// опционально: quiet zone
+
 lv_qrcode_set_quiet_zone(qr_wifi, true);
   lv_obj_set_pos(qr_wifi, qr1X, qr1Y);
   lv_obj_set_style_border_width(qr_wifi, 2, LV_PART_MAIN);
   lv_obj_set_style_border_color(qr_wifi, lv_palette_darken(LV_PALETTE_GREY, 3), LV_PART_MAIN);
-  //lv_obj_add_flag(qr_url,  LV_OBJ_FLAG_HIDDEN);
 
-  // ----- Text block (right of big QR) -----
   const int t1X = qr1X + qrBig + gap;
   int y = 4;
 
@@ -138,44 +115,46 @@ lv_qrcode_set_quiet_zone(qr_wifi, true);
   lv_label_set_long_mode(label_title, LV_LABEL_LONG_WRAP);
   lv_obj_set_style_text_font(label_title, &comfortaa_bold_18, LV_PART_MAIN);
   lv_obj_set_style_text_color(label_title, lv_color_hex(0xFF0000), LV_PART_MAIN);
+#if defined(BOARD_TDISPLAY_S3)
+  lv_obj_set_pos(label_title, margin, y);
+  lv_obj_set_width(label_title, W - 2 * margin);
+  lv_obj_set_style_text_align(label_title, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  lv_label_set_text(label_title, "НАСТРОЙКИ");
+#else
   lv_label_set_text(label_title, "ИНСТРУКЦИЯ ПО НАСТРОЙКЕ");
+#endif
   y += 22;
 
   label_l1 = lv_label_create(settings_screen);
 
-  
-
   lv_obj_set_pos(label_l1, t1X, y);
   lv_obj_set_width(label_l1, W - t1X - margin);
   lv_obj_set_style_text_font(label_l1, &corporate_s_w10_16, LV_PART_MAIN);
-  lv_obj_set_style_text_color(label_l1, lv_color_hex(0xCCFF33), LV_PART_MAIN); // greenyellow-ish
+  lv_obj_set_style_text_color(label_l1, lv_color_hex(0xCCFF33), LV_PART_MAIN);
 
-// lv_obj_remove_style_all(label_l1);
 lv_obj_set_style_text_opa(label_l1, LV_OPA_COVER, LV_PART_MAIN);
 lv_obj_set_style_blend_mode(label_title, LV_BLEND_MODE_NORMAL, LV_PART_MAIN);
 
   lv_label_set_text(label_l1, "1) Подключитесь к Wi-Fi:");
   y += 18;
 
-  // SSID line
   {
     lv_obj_t* lblSsidKey = lv_label_create(settings_screen);
     lv_obj_set_pos(lblSsidKey, t1X, y);
     lv_obj_set_style_text_font(lblSsidKey, &corporate_s_w10_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(lblSsidKey, lv_color_hex(0xFF9900), LV_PART_MAIN); // orange
+    lv_obj_set_style_text_color(lblSsidKey, lv_color_hex(0xFF9900), LV_PART_MAIN);
     lv_label_set_text(lblSsidKey, "SSID:");
 
     label_ssid = lv_label_create(settings_screen);
     lv_obj_set_pos(label_ssid, t1X + 50, y);
     lv_obj_set_width(label_ssid, W - (t1X + 50) - margin);
     lv_obj_set_style_text_font(label_ssid, &corporate_s_w10_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label_ssid, lv_color_hex(0x66CCFF), LV_PART_MAIN); // skyblue-ish
+    lv_obj_set_style_text_color(label_ssid, lv_color_hex(0x66CCFF), LV_PART_MAIN);
     lv_label_set_long_mode(label_ssid, LV_LABEL_LONG_DOT);
     lv_label_set_text(label_ssid, "");
     y += 18;
   }
 
-  // PASS line
   {
     lv_obj_t* lblPassKey = lv_label_create(settings_screen);
     lv_obj_set_pos(lblPassKey, t1X, y);
@@ -192,7 +171,7 @@ lv_obj_set_style_blend_mode(label_title, LV_BLEND_MODE_NORMAL, LV_PART_MAIN);
     lv_label_set_text(label_pass, "");
   }
 
-  // ----- Small URL QR (bottom-right) -----
+  // Малый QR открывает HTTP-адрес портала; подписи располагаются слева от него.
   const int qr2X = W - margin - qrSmall;
   const int qr2Y = H - margin - qrSmall;
 
@@ -204,10 +183,8 @@ lv_qrcode_set_quiet_zone(qr_url, true);
   lv_obj_set_pos(qr_url, qr2X, qr2Y);
   lv_obj_set_style_border_width(qr_url, 2, LV_PART_MAIN);
   lv_obj_set_style_border_color(qr_url, lv_palette_darken(LV_PALETTE_GREY, 3), LV_PART_MAIN);
-//lv_obj_add_flag(qr_wifi, LV_OBJ_FLAG_HIDDEN);
 
-  // ----- Bottom text (left of small QR) -----
-  const int bx = qr2X - 10;       // right edge for text
+  const int bx = qr2X - 10;
   const int by2 = H - 2 - 18;
   const int by3 = H - 2;
 
@@ -227,14 +204,39 @@ lv_qrcode_set_quiet_zone(qr_url, true);
   lv_obj_set_style_text_font(label_url, &corporate_s_w10_16, LV_PART_MAIN);
   lv_obj_set_style_text_color(label_url, lv_color_hex(0x66CCFF), LV_PART_MAIN);
   lv_label_set_text(label_url, "");
-  lv_obj_align(label_url, LV_ALIGN_BOTTOM_RIGHT, -(qrSmall + 10) + 0, 0); // будет “на той же линии”, но сдвинем чуть позже
+  lv_obj_align(label_url, LV_ALIGN_BOTTOM_RIGHT, -(qrSmall + 10) + 0, 0);
 
-  // чуть подправим позицию URL, чтобы он был правее "перейдите на"
-  // самый простой способ — сделать его “плавающим” рядом:
+#if defined(BOARD_TDISPLAY_S3)
+
+  constexpr int lineStep = 18;
+  const int textTop = H - margin - 2 * lineStep;
+  lv_label_set_text(label_l2a, "2) Откройте в браузере:");
+  lv_obj_add_flag(label_l2b, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_t* lines[] = {label_l2a, label_url};
+  for (int i = 0; i < 2; ++i) {
+    lv_obj_set_align(lines[i], LV_ALIGN_TOP_LEFT);
+    lv_obj_set_pos(lines[i], margin, textTop + i * lineStep);
+    lv_obj_set_width(lines[i], qr2X - gap - margin);
+    lv_obj_set_style_text_align(lines[i], LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_label_set_long_mode(lines[i], LV_LABEL_LONG_CLIP);
+  }
+#elif defined(BOARD_M5CORE_S3)
+
+  constexpr int lineStep = 18;
+  const int textTop = H - margin - 4 * lineStep;
+  lv_obj_t* lines[] = {label_l2a, label_l2b, label_url};
+  for (int i = 0; i < 3; ++i) {
+    lv_obj_set_align(lines[i], LV_ALIGN_TOP_LEFT);
+    lv_obj_set_pos(lines[i], margin, textTop + i * lineStep);
+    lv_obj_set_width(lines[i], qr2X - gap - margin);
+    lv_label_set_long_mode(lines[i], LV_LABEL_LONG_CLIP);
+  }
+#else
+
   lv_obj_set_x(label_url, lv_obj_get_x(label_l2b) + 110);
   lv_obj_set_y(label_url, lv_obj_get_y(label_l2b));
+#endif
 
-  // стартовые QR (пустые)
   lv_qrcode_update(qr_wifi, "", 0);
   lv_qrcode_update(qr_url,  "", 0);
 
@@ -244,7 +246,6 @@ lv_qrcode_set_quiet_zone(qr_url, true);
 void ui_settings_update_from_portal(const CaptivePortal& portal) {
   if (!settings_screen) return;
 
-  // Достаём данные (тут String внутри портала — ок, мы их не конкатеним)
   const String& ssidS = portal.apSsid();
   const String& passS = portal.apPass();
   const IPAddress ip  = portal.apIP();
@@ -252,11 +253,9 @@ void ui_settings_update_from_portal(const CaptivePortal& portal) {
   const char* ssid = ssidS.c_str();
   const char* pass = passS.c_str();
 
-  // Обновим видимые строки
   set_label_text_safe(label_ssid, ssid);
   set_label_text_safe(label_pass, pass);
 
-  // Соберём payload (без String concat)
   char ssidEsc[96];
   char passEsc[192];
   wifiEscape(ssid, ssidEsc, sizeof(ssidEsc));
@@ -272,7 +271,6 @@ void ui_settings_update_from_portal(const CaptivePortal& portal) {
 
   set_label_text_safe(label_url, urlPayload);
 
-  // QR обновляем только если изменилось
   update_qr_if_changed(qr_wifi, wifiPayload, lastWifiPayload, sizeof(lastWifiPayload));
   update_qr_if_changed(qr_url,  urlPayload,  lastUrlPayload,  sizeof(lastUrlPayload));
 }

@@ -1,13 +1,12 @@
-// ===== captive_portal.cpp =====
+// Точка доступа и веб-настройки: DNS-перенаправление, сохранение параметров и тест звука.
 #include "captive_portal.h"
+#include "board_config.h"
 
 #include "esp_netif.h"
 #include "lwip/inet.h"
 
-#include "time_utils.h" // нужен applyTimeConfig()
+#include "time_utils.h"
 #include <pgmspace.h>
-
-// ==================== Статический HTML в PROGMEM ====================
 
 static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <html lang="ru">
@@ -41,7 +40,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 
   .muted{ color:#666; font-size:13px; }
 
-  /* ---- WiFi slots ---- */
+  /* Список сохранённых сетей Wi-Fi. */
   .slots{ display:flex; flex-direction:column; gap:10px; margin-top:10px; }
 
   .slot{
@@ -127,11 +126,11 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     cursor:pointer;
   }
 
-  /* ---- Time card ---- */
+  /* Настройки времени. */
   .row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   @media(max-width:820px){ .row2{ grid-template-columns:1fr; } }
 
-  /* ---- SGV band ---- */
+  /* Цветовая шкала порогов глюкозы. */
   .band {
     width: 100%;
     padding: 40px 0;
@@ -177,7 +176,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   }
 
 
-  /* ---- Actions ---- */
+  /* Кнопки сохранения, выхода и сброса. */
   .actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   .btn{
     padding:12px 16px;
@@ -214,6 +213,22 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       >
       <div class="muted" style="margin-top:6px;">
         Указывайте только домен (и порт при необходимости), без http:// и без /api/...
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <div class="muted" style="margin-bottom:6px;">Токен доступа (Nightscout)</div>
+
+      <div>
+        <input
+          id="token"
+          placeholder="security token"
+          autocomplete="off"
+          style="width:100%;"
+        >
+        <div class="muted" style="margin-top:6px;">
+          Если Nightscout защищён, сюда вставьте token. Если не нужен — оставьте пустым.
+        </div>
       </div>
     </div>
   </div>
@@ -273,6 +288,22 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     <div class="muted">Должно быть строго: b0 &lt; b1 &lt; b2 &lt; b3</div>
   </div>
 
+  <div class="card" id="alarmCard" style="display:none">
+    <label style="display:flex;align-items:center;gap:10px">
+      <input type="checkbox" id="soundAlarmEnabled" style="width:auto">
+      <span>Звуковая тревога: красная зона или нет свежих данных 15 минут</span>
+    </label>
+    <label for="alarmVolume">Громкость: <span id="alarmVolumeValue">31%</span></label>
+    <input type="range" id="alarmVolume" min="0" max="100" step="1" value="31">
+    <button class="btn" id="testSoundBtn" type="button">Проверить сигнал</button>
+    <div class="muted" id="soundTestStatus" role="status"></div>
+    <div class="muted" style="margin-top:8px">
+      Для красной зоны используются крайние границы SGV выше. Возраст данных
+      отсчитывается от времени измерения. Кнопка на экране откладывает обе тревоги
+      последовательно на 30, 60, 90, 120 минут; следующее нажатие отменяет отсрочку.
+    </div>
+  </div>
+
   <div class="card">
     <div class="actions">
       <button class="btn" id="saveExitBtn" type="button">Сохранить и выйти</button>
@@ -302,16 +333,41 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   const tzH = document.getElementById('tzH');
   const tzM = document.getElementById('tzM');
   const dst = document.getElementById('dst');
+  const soundAlarmEnabled = document.getElementById('soundAlarmEnabled');
+  const alarmVolume = document.getElementById('alarmVolume');
+  const alarmVolumeValue = document.getElementById('alarmVolumeValue');
+  alarmVolume.addEventListener('input', () => {
+    alarmVolumeValue.textContent = alarmVolume.value + '%';
+  });
+  document.getElementById('testSoundBtn').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const status = document.getElementById('soundTestStatus');
+    button.disabled = true;
+    try {
+      const body = new URLSearchParams({volume: alarmVolume.value});
+      const response = await fetch('/test_sound', {method:'POST', body});
+      if (!response.ok) throw new Error(await response.text());
+      status.textContent = Number(alarmVolume.value) === 0
+        ? 'Громкость 0% — звук выключен.' : 'Проверочный сигнал отправлен.';
+    } catch (error) {
+      status.textContent = 'Ошибка проверки: ' + error.message;
+    } finally {
+      setTimeout(() => { button.disabled = false; }, 700);
+    }
+  });
+  let soundAlarmSupported = false;
 
   const band = document.getElementById('band');
   const boundsInputs = [b0,b1,b2,b3];
 
   const hostInp = document.getElementById('host');
+  const tokenInp = document.getElementById('token');
 
-  // slots: {ssid, pass, hasPass, passDirty, id}
+
+  // Сеть хранит SSID, пароль, признаки сохранённого и изменённого пароля, а также идентификатор.
   let slots = Array.from({length:5}, (_,i)=>({ssid:'', pass:'', hasPass:false, passDirty:false, id:i}));
 
-  // ----- HOST sanitize (front-end) -----
+  // Нормализация адреса Nightscout перед отправкой на устройство.
   function sanitizeHost(s){
     s = String(s || '').trim();
     s = s.replace(/^https?:\/\//i, '');
@@ -324,7 +380,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   hostInp.addEventListener('blur', ()=>{ hostInp.value = sanitizeHost(hostInp.value); });
   hostInp.addEventListener('paste', ()=>{ setTimeout(()=>{ hostInp.value = sanitizeHost(hostInp.value); }, 0); });
 
-  // ----- SGV -----
+  // Отображение границ и цветовой шкалы глюкозы.
   function normalizeFloat1(el) {
     let v = el.value.replace(',', '.').replace(/[^0-9.]/g,'');
     const parts = v.split('.');
@@ -374,7 +430,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     return true;
   }
 
-  // ----- TZ -----
+  // Выбор часового пояса и собственного смещения UTC.
   function fmtTzLabel(mins){
     const sign = mins >= 0 ? "+" : "-";
     const a = Math.abs(mins);
@@ -436,7 +492,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     return total;
   }
 
-  // ----- WiFi slots UI -----
+  // Редактирование сохранённых сетей Wi-Fi.
   function escapeHtml(s){
     return String(s)
       .replaceAll("&","&amp;")
@@ -525,7 +581,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       passInp.type = (passInp.type === 'password') ? 'text' : 'password';
     });
 
-    // drag & drop reorder
+    // Перетаскивание меняет порядок сетей.
     el.addEventListener('dragstart', (e)=>{
       e.dataTransfer.setData('text/plain', String(slotIndex));
       e.dataTransfer.effectAllowed = 'move';
@@ -553,12 +609,13 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     updateGradient();
   }
 
-  // ----- Load cfg -----
+  // Загрузка текущих параметров устройства в форму.
   async function loadCfg(){
     const r = await fetch('/cfg', {cache:'no-store'});
     const j = await r.json();
 
     hostInp.value = sanitizeHost(j.host || "");
+    tokenInp.value = (j.token || "");
 
     slots = (j.wifi || []).slice(0,5).map((w,idx)=>({
       ssid: w.ssid || "",
@@ -571,6 +628,11 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     renderAllSlots();
 
     dst.value = (j.dst ? '1':'0');
+    soundAlarmSupported = !!j.soundAlarmSupported;
+    document.getElementById('alarmCard').style.display = soundAlarmSupported ? '' : 'none';
+    soundAlarmEnabled.checked = !!j.soundAlarmEnabled;
+    alarmVolume.value = j.alarmVolume ?? 31;
+    alarmVolumeValue.textContent = alarmVolume.value + '%';
 
     const cur = Number(j.tzMin ?? 0);
     const found = Array.from(tzSel.options).find(o => o.value === String(cur));
@@ -593,7 +655,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     updateGradient();
   }
 
-  // ----- Save/Exit -----
+  // Отправка настроек и выход из портала.
   async function saveOnly(){
     msgEl.textContent='';
     msgEl.className='msg';
@@ -629,12 +691,15 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 
     form.set('tzOff', String(tzOffMin));
     form.set('dst', dst.value === '1' ? '1' : '0');
+    if (soundAlarmSupported) form.set('soundAlarmEnabled', soundAlarmEnabled.checked ? '1' : '0');
+    if (soundAlarmSupported) form.set('alarmVolume', alarmVolume.value);
     nums.forEach((v,i)=>form.set('b'+i, v.toFixed(1)));
 
-    // sanitize host before sending
+    // Перед отправкой убираем из адреса лишние части URL.
     const hostClean = sanitizeHost(hostInp.value || '');
     hostInp.value = hostClean;
     form.set('host', hostClean);
+    form.set('token', (tokenInp.value || '').trim());
 
     const r = await fetch('/save', {
       method:'POST',
@@ -704,7 +769,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       });
   });
 
-  // ----- Boot -----
+  // Начальное заполнение формы после загрузки страницы.
   window.addEventListener('resize', updateGradient);
   window.addEventListener('scroll', updateGradient, {passive:true});
 
@@ -718,21 +783,30 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 </body>
 </html>)HTML";
 
-
-// ==================== Локальные утилиты ====================
+// Принимается только целое число от 0 до 100, без знака и посторонних символов.
+static bool parseVolume(const String& value, uint8_t& result) {
+  if (value.isEmpty() || value.length() > 3) return false;
+  unsigned parsed = 0;
+  for (size_t i = 0; i < value.length(); ++i) {
+    if (value[i] < '0' || value[i] > '9') return false;
+    parsed = parsed * 10 + unsigned(value[i] - '0');
+  }
+  if (parsed > 100) return false;
+  result = uint8_t(parsed);
+  return true;
+}
 
 static String genApPass(uint8_t len = 10) {
-  // len должен быть >= 8 (ограничение WPA2)
+
   if (len < 8) len = 8;
 
-  // без похожих символов (0/O, 1/l/I)
   static const char* alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const size_t n = strlen(alphabet);
 
   String out;
   out.reserve(len);
   for (uint8_t i = 0; i < len; i++) {
-    uint32_t r = esp_random();          // крипто-рандом ESP32
+    uint32_t r = esp_random();
     out += alphabet[r % n];
   }
   return out;
@@ -760,7 +834,7 @@ static String escJson(const String& s) {
 }
 
 void CaptivePortal::logI(const String& s) {
-  // Информационные сообщения только в Serial, без попадания в экран логов
+
   Serial.println(s);
 }
 void CaptivePortal::logE(const String& s) {
@@ -774,37 +848,41 @@ float CaptivePortal::toF(const String& s) {
   return v.toFloat();
 }
 
-// --- IMPORTANT: sanitize Nightscout HOST from user input ---
 static void sanitizeHostInPlace(String& h) {
   h.trim();
 
-  // если пользователь вставил http/https — обрежем
   if (h.startsWith("http://"))  h.remove(0, 7);
   if (h.startsWith("https://")) h.remove(0, 8);
 
-  // если вставлен полный URL — отрезать путь/квери
   int slash = h.indexOf('/');
   if (slash >= 0) h.remove(slash);
 
-  // remove trailing slashes just in case
   while (h.endsWith("/")) h.remove(h.length() - 1);
 
-  // remove spaces inside
   h.replace(" ", "");
 }
 
-static void forceApDnsToSelf(const IPAddress& apIP) {
+// DHCP сообщает клиентам адрес устройства как DNS-сервер для обнаружения портала.
+static bool forceApDnsToSelf(const IPAddress& apIP) {
   esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-  if (!ap) return;
+  if (!ap) return false;
+
+  esp_err_t stopped = esp_netif_dhcps_stop(ap);
+  if (stopped != ESP_OK && stopped != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) return false;
 
   esp_netif_dns_info_t dns{};
   dns.ip.type = IPADDR_TYPE_V4;
   dns.ip.u_addr.ip4.addr = ipaddr_addr(apIP.toString().c_str());
-  esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
+  const esp_err_t dnsResult = esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
+
+  uint8_t offerDns = 0x02;
+  const esp_err_t optionResult = esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET,
+      ESP_NETIF_DOMAIN_NAME_SERVER, &offerDns, sizeof(offerDns));
+  const esp_err_t startResult = esp_netif_dhcps_start(ap);
+  return dnsResult == ESP_OK && optionResult == ESP_OK && startResult == ESP_OK;
 }
 
-// ==================== Portal begin/stop/tick ====================
-
+// Запуск AP, DNS и HTTP; проверочные запросы ОС направляются на страницу настройки.
 bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* settings) {
   if (_active) return true;
 
@@ -817,13 +895,11 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
   WiFi.disconnect(true);
   delay(200);
 
-  // Только AP (сканирования больше нет)
   WiFi.mode(WIFI_AP);
 
   WiFi.softAPConfig(_apIP, _apIP, IPAddress(255, 255, 255, 0));
 
-  // _apSsid = "TDisplay-Setup";
-  _apPass = genApPass(8); // 8..12 норм
+  _apPass = genApPass(8);
 
   bool apOk = WiFi.softAP(_apSsid.c_str(), _apPass.c_str());
   if (!apOk) {
@@ -832,7 +908,7 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
   }
 
   delay(150);
-  forceApDnsToSelf(_apIP);
+  if (!forceApDnsToSelf(_apIP)) logE("[AP] DHCP DNS configuration failed");
 
   logI(String("[AP] SSID: ") + _apSsid);
   logI(String("[AP] PASS: ") + _apPass);
@@ -865,7 +941,12 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
   }
 
   _dns.setErrorReplyCode(DNSReplyCode::NoError);
-  _dns.start(53, "*", _apIP);
+  _dns.setTTL(0);
+  if (!_dns.start(53, "*", _apIP)) {
+    logE("[AP] DNS server failed");
+    WiFi.softAPdisconnect(true);
+    return false;
+  }
 
   auto noCache = [this]() {
     _srv.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
@@ -880,7 +961,7 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
   auto sendPortal = [this, noCache, logReq]() {
     logReq();
     noCache();
-    // HTML сразу из PROGMEM
+
     _srv.send_P(200, "text/html; charset=utf-8", INDEX_HTML);
   };
 
@@ -905,7 +986,19 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
     handleSave();
   });
 
-  // --- actions ---
+  // Тест ставится в очередь; воспроизведение выполняется в основном цикле без задержки HTTP.
+  _srv.on("/test_sound", HTTP_POST, [this, noCache]() {
+    noCache();
+    uint8_t volume;
+    if (!parseVolume(_srv.arg("volume"), volume)) {
+      _srv.send(400, "text/plain", "volume must be 0..100");
+      return;
+    }
+    _soundTestVolume = volume;
+    _soundTestPending = true;
+    _srv.send(200, "text/plain", "OK");
+  });
+
   _srv.on("/exit", HTTP_POST, [this, logReq, noCache] {
     logReq();
     noCache();
@@ -928,7 +1021,6 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
     _srv.send(204);
   });
 
-  // Captive probe endpoints
   _srv.on("/success.txt", HTTP_GET, redirectToPortal);
   _srv.on("/success.txt", HTTP_HEAD, redirectToPortal);
 
@@ -945,12 +1037,8 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
   _srv.on("/library/test/success.html", HTTP_GET, sendPortal);
   _srv.on("/library/test/success.html", HTTP_HEAD, sendPortal);
 
-  // Windows
-  _srv.on("/connecttest.txt", HTTP_GET, [this, logReq, noCache] {
-    logReq();
-    noCache();
-    _srv.send(200, "text/plain; charset=utf-8", "captive");
-  });
+  _srv.on("/connecttest.txt", HTTP_GET, redirectToPortal);
+  _srv.on("/connecttest.txt", HTTP_HEAD, redirectToPortal);
   _srv.on("/ncsi.txt", HTTP_GET, redirectToPortal);
   _srv.on("/fwlink", HTTP_GET, redirectToPortal);
   _srv.on("/redirect", HTTP_GET, redirectToPortal);
@@ -971,7 +1059,6 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
       return;
     }
 
-    // Полный сброс настроек
     if (_store->factoryReset(*_settings)) {
       _srv.send(200, "text/plain; charset=utf-8", "OK");
       delay(150);
@@ -980,7 +1067,6 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
       _srv.send(500, "text/plain; charset=utf-8", "factory reset failed");
     }
   });
-
 
   _srv.begin();
   _active = true;
@@ -1002,13 +1088,12 @@ void CaptivePortal::stop() {
   logI("[AP] Captive portal stopped");
 }
 
+// Обслуживание DNS и HTTP должно регулярно вызываться из основного цикла.
 void CaptivePortal::tick() {
   if (!_active) return;
   _dns.processNextRequest();
   _srv.handleClient();
 }
-
-// ==================== cfg/save ====================
 
 void CaptivePortal::handleCfg() {
   if (!_settings) {
@@ -1022,7 +1107,7 @@ void CaptivePortal::handleCfg() {
     if (i) j += ",";
     j += "{";
     j += "\"ssid\":\"" + escJson(_settings->wifi[i].ssid) + "\",";
-    // ВАЖНО: пароль не отдаём, только флаг hasPass
+
     bool hasPass = (_settings->wifi[i].pass[0] != 0);
     j += "\"hasPass\":" + String(hasPass ? "true" : "false") + ",";
     j += "\"pass\":\"\"";
@@ -1031,9 +1116,17 @@ void CaptivePortal::handleCfg() {
   j += "],";
 
   j += "\"host\":\"" + escJson(String(_settings->hostSite)) + "\",";
+  j += "\"token\":\"" + escJson(String(_settings->nsToken)) + "\",";
 
   j += "\"tzMin\":" + String(_settings->tzMinutes) + ",";
   j += "\"dst\":" + String(_settings->dstEnable ? "true" : "false") + ",";
+  j += "\"soundAlarmEnabled\":" + String(_settings->soundAlarmEnabled ? "true" : "false") + ",";
+  j += "\"alarmVolume\":" + String(_settings->alarmVolume) + ",";
+#if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
+  j += "\"soundAlarmSupported\":true,";
+#else
+  j += "\"soundAlarmSupported\":false,";
+#endif
   j += "\"bounds\":[" +
        String(_settings->sgvBounds[0], 1) + "," +
        String(_settings->sgvBounds[1], 1) + "," +
@@ -1044,6 +1137,7 @@ void CaptivePortal::handleCfg() {
   _srv.send(200, "application/json; charset=utf-8", j);
 }
 
+// Проверяем поля до записи и обновляем рабочие параметры только после успешного сохранения.
 void CaptivePortal::handleSave() {
   if (!_settings || !_store) {
     logE("[HTTP] /save: no store/settings");
@@ -1053,38 +1147,39 @@ void CaptivePortal::handleSave() {
 
   AppSettings s = *_settings;
 
-  // Wi-Fi slots (порядок задаёт фронт: ssid0..ssid4, pass0..pass4, passChanged0..4)
   for (int i = 0; i < MAX_WIFI; i++) {
     String ss = _srv.arg("ssid" + String(i));
     String pw = _srv.arg("pass" + String(i));
-    String ch = _srv.arg("passChanged" + String(i)); // "1" если поле меняли
+    String ch = _srv.arg("passChanged" + String(i));
 
     ss.trim();
     pw.trim();
     ch.trim();
 
     if (ss.length() == 0) {
-      // пустой SSID — слот очищаем полностью, в т.ч. пароль
+
       s.wifi[i].ssid[0] = 0;
       s.wifi[i].pass[0] = 0;
     } else {
       strlcpy(s.wifi[i].ssid, ss.c_str(), sizeof(s.wifi[i].ssid));
 
       if (ch == "1") {
-        // пароль реально меняли: можно установить новый (включая пустой, чтобы очистить)
+
         strlcpy(s.wifi[i].pass, pw.c_str(), sizeof(s.wifi[i].pass));
       } else {
-        // пароль не трогали — оставляем как был (_settings уже скопирован в s)
+
       }
     }
   }
 
-  // host site (sanitize! store only host[:port] without scheme/path)
   String host = _srv.arg("host");
   sanitizeHostInPlace(host);
   strlcpy(s.hostSite, host.c_str(), sizeof(s.hostSite));
 
-  // часовой пояс
+  String token = _srv.arg("token");
+  token.trim();
+  strlcpy(s.nsToken, token.c_str(), sizeof(s.nsToken));
+
   String tzStr = _srv.arg("tzOff");
   if (tzStr.length() == 0) tzStr = _srv.arg("tzMin");
 
@@ -1094,8 +1189,21 @@ void CaptivePortal::handleSave() {
 
   s.tzMinutes = (int16_t)tz;
   s.dstEnable = (_srv.arg("dst") == "1");
+#if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
+  if (_srv.hasArg("soundAlarmEnabled")) {
+    const String alarmEnabled = _srv.arg("soundAlarmEnabled");
+    if (alarmEnabled != "0" && alarmEnabled != "1") {
+      _srv.send(400, "text/plain; charset=utf-8", "invalid soundAlarmEnabled");
+      return;
+    }
+    s.soundAlarmEnabled = (alarmEnabled == "1");
+  }
+  if (_srv.hasArg("alarmVolume") && !parseVolume(_srv.arg("alarmVolume"), s.alarmVolume)) {
+    _srv.send(400, "text/plain", "alarmVolume must be 0..100");
+    return;
+  }
+#endif
 
-  // bounds
   for (int i = 0; i < 4; i++) {
     s.sgvBounds[i] = toF(_srv.arg("b" + String(i)));
   }
@@ -1104,13 +1212,11 @@ void CaptivePortal::handleSave() {
     return;
   }
 
-  // пользователь явно сохранил настройки из портала — считаем онбординг пройденным
   s.onboardingDone = true;
 
   if (_store->save(s)) {
     *_settings = s;
 
-    // Apply TZ/DST instantly for BOTH your legacy time_utils and system localtime()
     applyTimeConfig(s.tzMinutes, s.dstEnable);
 
     _srv.send(200, "text/plain; charset=utf-8", "OK");

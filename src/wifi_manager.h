@@ -1,12 +1,13 @@
+// Первичное подключение к доступной сети и переподключение к выбранному SSID.
 #pragma once
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
-#include "logs.h" 
+#include "logs.h"
 
 struct WifiCred {
   const char* ssid;
-  const char* pass;   // nullptr или "" -> открытая сеть
+  const char* pass;
 };
 
 struct WifiManagerConfig {
@@ -15,16 +16,10 @@ struct WifiManagerConfig {
   uint32_t retryDelayMs          = 500;
   bool enableAutoReconnect       = true;
 
-  bool enableFallbackAP          = false;
-  const char* fallbackApSsid     = "TDisplayS3-Setup";
-  const char* fallbackApPass     = "12345678";
-  IPAddress apIp                 = IPAddress(192,168,4,1);
-  IPAddress apGw                 = IPAddress(192,168,4,1);
-  IPAddress apMask               = IPAddress(255,255,255,0);
+  uint8_t  beginAttempts         = 3;
 
-  uint8_t  beginAttempts         = 3;      // 3 попытки на старте
-  uint32_t reconnectPeriodMs     = 3000;   // период попыток при обрыве
-  uint32_t reconnectTryWindowMs  = 8000;   // окно ожидания WL_CONNECTED на одну попытку
+  uint32_t reconnectPeriodMs     = 3000;
+  uint32_t reconnectTryWindowMs  = 8000;
 };
 
 class WifiManager {
@@ -32,22 +27,38 @@ public:
   WifiManager() = default;
 
   void setConfig(const WifiManagerConfig& cfg) { _cfg = cfg; }
-
-  // Подключить ваш буфер логов (можно nullptr)
   void setLogger(LogBuffer* logBuf) { _logs = logBuf; }
 
-  // Добавить список сетей
   void addNetworks(const WifiCred* list, size_t count);
 
-  // Запуск STA подключения
+  // Первый выбор сети через WiFiMulti; успешный SSID фиксируется для повторных подключений.
   bool begin();
+
+  // Переподключение выполняется только к последней выбранной сети.
+  void tick();
+
+  const char* lastSsid() const { return _lockedSsid.c_str(); }
+  bool isLocked() const { return !_lockedSsid.isEmpty(); }
 
 private:
   WifiManagerConfig _cfg{};
   WiFiMulti _multi;
   LogBuffer* _logs = nullptr;
-  bool _apMode = false;
+
+  struct CredItem {
+    String ssid;
+    String pass;
+  };
+  CredItem _creds[10];
+  size_t _credCount = 0;
+
+  String _lockedSsid;
+  String _lockedPass;
+
+  uint32_t _lastReconnectAttemptMs = 0;
+  uint32_t _windowStartMs = 0;
 
   void logStatus(const char* prefix = nullptr);
-  void startFallbackAP();
+  void lockCurrentSsid();
+  bool findPassForSsid(const String& ssid, String& outPass) const;
 };
