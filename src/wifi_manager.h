@@ -11,7 +11,7 @@ struct WifiCred {
 };
 
 struct WifiManagerConfig {
-  const char* hostname           = "t-display-s3";
+  const char* hostname           = "NS-Monitior";
   uint32_t connectTimeoutMs      = 20000;
   uint32_t retryDelayMs          = 500;
   bool enableAutoReconnect       = true;
