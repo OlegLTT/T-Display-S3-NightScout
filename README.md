@@ -234,7 +234,16 @@ T-Display S3 и CoreS3 / CoreS3 SE используют одно меню и о�
 
 ## Snooze — обе платы
 
-Поведение соответствует [M5_NightscoutMon](https://github.com/mlukasek/M5_NightscoutMon#buttons):
+**Логика Snooze и формат её синхронизации по локальной сети заимствованы из
+проекта [M5_NightscoutMon](https://github.com/mlukasek/M5_NightscoutMon)
+автора Martin Lukasek ([mlukasek](https://github.com/mlukasek)) и адаптированы
+для T-Display S3 и CoreS3 / CoreS3 SE.**
+
+Из исходного проекта взяты цикл паузы 1×/2×/3×/4×/OFF, окно повторного нажатия
+2 секунды и принцип UDP-рассылки времени окончания паузы с CRC16 адреса Nightscout.
+Источники: [описание кнопки Snooze](https://github.com/mlukasek/M5_NightscoutMon#buttons)
+и [исходный код UDP-обмена](https://github.com/mlukasek/M5_NightscoutMon/blob/master/M5_NightscoutMon.ino#L1663).
+
 GPIO14 на T-Display или нижняя экранная кнопка CoreS3 **сразу** включает общую
 паузу звуковых тревог. Её можно включить заранее, при нормальной глюкозе,
 без интернета и до загрузки настроек сервера, если звук включён в настройках.

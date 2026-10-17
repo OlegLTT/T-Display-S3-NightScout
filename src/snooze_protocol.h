@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <cstdio>
 
-// Совместимый с M5_NightscoutMon UDP-протокол. Время — Unix seconds (UTC).
+// Формат UDP-протокола заимствован из M5_NightscoutMon, Martin Lukasek (mlukasek).
+// Источник: https://github.com/mlukasek/M5_NightscoutMon/blob/master/M5_NightscoutMon.ino#L1663
+// Время — Unix seconds (UTC); сохранена совместимость с исходным проектом.
 namespace snooze_protocol {
 constexpr uint16_t port = 50555;
 constexpr uint32_t max_seconds = 86400;

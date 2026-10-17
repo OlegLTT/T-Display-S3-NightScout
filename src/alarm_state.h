@@ -53,6 +53,8 @@ public:
         }
     }
 
+    // Цикл Snooze заимствован из M5_NightscoutMon, Martin Lukasek (mlukasek).
+    // Источник: https://github.com/mlukasek/M5_NightscoutMon#buttons
     // Пауза применяется сразу, включая упреждающее нажатие до тревоги.
     ALARM_CONSTEXPR14 void cycle_snooze(uint32_t now) {
         if (!enabled_) return;

@@ -1,3 +1,6 @@
+// Логика LAN-синхронизации Snooze заимствована из M5_NightscoutMon,
+// Martin Lukasek (mlukasek), и адаптирована для T-Display S3 и CoreS3.
+// Источник: https://github.com/mlukasek/M5_NightscoutMon/blob/master/M5_NightscoutMon.ino#L1663
 #include "snooze_lan.h"
 #include "snooze_protocol.h"
 #include "logs.h"
