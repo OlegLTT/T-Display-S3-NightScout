@@ -1,4 +1,4 @@
-// Выбранная яркость хранится отдельно от временного максимума во время тревоги.
+// Выбранная яркость хранится отдельно от временного максимума тревоги и настроек.
 #pragma once
 #include "app_constants.h"
 #include <Arduino.h>
@@ -19,6 +19,7 @@ public:
   void begin(const BacklightConfig& cfg);
   void setPercent(uint8_t percent);
   void setAlarmBoost(bool active);
+  void setSettingsBoost(bool active);
   void next();
   uint8_t currentPercent() const;
 
@@ -34,6 +35,7 @@ private:
   void applyPercent(uint8_t percent);
   uint8_t _requestedPercent = app_constants::default_brightness_percent;
   bool _alarmBoost = false;
+  bool _settingsBoost = false;
   bool _pwmAttached = false;
   void backlightInit();
   void backlightForceMax();

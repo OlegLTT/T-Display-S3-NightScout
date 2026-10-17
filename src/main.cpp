@@ -159,6 +159,7 @@ static void changeScreen() {
 // AP+STA сохраняет соединение с Nightscout, пока открыты настройки.
 static void enterSettings() {
   currentScreen = ScreenId::SCREEN_SETTINGS;
+  backlight.setSettingsBoost(true);
   portal.begin(&g_logs, &settingsStore, &appCfg);
   needUpdateScreen = true;
 }
@@ -220,18 +221,19 @@ static void onTouchAction(ui_navigation::Action action) {
 // POWER: нажатие — яркость, двойное — журнал, удержание — настройки.
 static void tickCoreButton() {
   using Event = gfx::Display::button_event;
-  switch (gfx::Display::instance().take_button_event()) {
+  const auto event = gfx::Display::instance().take_button_event();
+  if (portal.active()) {
+    if (event != Event::none) g_rebootRequested = true;
+    return;
+  }
+  switch (event) {
     case Event::click: changeBacklight(); break;
     case Event::double_click:
       if (currentScreen == ScreenId::SCREEN_LOGS) exitLogs();
       else enterLogs();
       break;
     case Event::hold:
-      if (!portal.active()) enterSettings();
-      else {
-        currentScreen = ScreenId::SCREEN_SETTINGS;
-        requestScreen(currentScreen, LV_SCR_LOAD_ANIM_NONE);
-      }
+      enterSettings();
       break;
     case Event::none: break;
   }
@@ -248,6 +250,11 @@ static void tickButtons() {
   const uint32_t now = millis();
   bool uTick = btnUser.tick();
   bool bTick = btnBoot.tick();
+  // Реагируем на новое нажатие до обработки комбинаций; удержание входа не перезапускает устройство.
+  if (portal.active()) {
+    if (btnUser.press() || btnBoot.press()) g_rebootRequested = true;
+    return;
+  }
   btnBoth.tick(btnBoot, btnUser);
 
   if (btnBoth.hold()) {
@@ -636,6 +643,7 @@ static void tickAlarm() {
 #endif
 
 void loop() {
+  backlight.setSettingsBoost(portal.active());
 
 #if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
   tickAlarm();

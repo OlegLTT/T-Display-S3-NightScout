@@ -1,4 +1,4 @@
-// Выбранная яркость хранится отдельно от временного максимума во время тревоги.
+// Выбранная яркость хранится отдельно от временного максимума тревоги и настроек.
 #include "app_constants.h"
 #include "backlight.h"
 #include <esp_arduino_version.h>
@@ -93,19 +93,29 @@ void Backlight::backlightForceMax() {
 #endif
 }
 
-// Во время тревоги запоминаем выбор, но оставляем физическую подсветку на максимуме.
+// При временном максимуме запоминаем выбор, но оставляем физическую подсветку на 100%.
 void Backlight::setPercent(uint8_t percent) {
   if (percent < 1) percent = 1;
   if (percent > 100) percent = 100;
   _requestedPercent = percent;
-  if (!_alarmBoost) applyPercent(percent);
+  if (!_alarmBoost && !_settingsBoost) applyPercent(percent);
 }
 
 // Меняем аппаратную яркость только при включении или снятии временного максимума.
 void Backlight::setAlarmBoost(bool active) {
   if (_alarmBoost == active) return;
+  const bool wasBoosted = _alarmBoost || _settingsBoost;
   _alarmBoost = active;
-  applyPercent(active ? 100 : _requestedPercent);
+  const bool boosted = _alarmBoost || _settingsBoost;
+  if (wasBoosted != boosted) applyPercent(boosted ? 100 : _requestedPercent);
+}
+
+void Backlight::setSettingsBoost(bool active) {
+  if (_settingsBoost == active) return;
+  const bool wasBoosted = _alarmBoost || _settingsBoost;
+  _settingsBoost = active;
+  const bool boosted = _alarmBoost || _settingsBoost;
+  if (wasBoosted != boosted) applyPercent(boosted ? 100 : _requestedPercent);
 }
 
 void Backlight::applyPercent(uint8_t percent) {
