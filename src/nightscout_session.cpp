@@ -8,8 +8,6 @@
 using su::SH;
 namespace {
 constexpr uint32_t statusPollMs = 300000;
-const char* flagNames[] = {"alarmUrgentLow", "alarmLow", "alarmHigh", "alarmUrgentHigh"};
-const char* minuteNames[] = {"alarmUrgentLowMins", "alarmLowMins", "alarmHighMins", "alarmUrgentHighMins"};
 
 String encode(const String& input) {
     const char hex[] = "0123456789ABCDEF";
@@ -79,7 +77,7 @@ uint32_t NightscoutSession::lastRequestAtMs() const {
     if (!_mutex) return 0;
     xSemaphoreTake(_mutex,portMAX_DELAY); uint32_t value=_lastRequest; xSemaphoreGive(_mutex); return value;
 }
-ns_alarm::Snapshot NightscoutSession::alarms() const {
+ns_alarm::Snapshot NightscoutSession::thresholds() const {
     if (!_mutex) return {};
     xSemaphoreTake(_mutex,portMAX_DELAY); auto value=_state; xSemaphoreGive(_mutex); return value;
 }
@@ -89,7 +87,7 @@ void NightscoutSession::publish(const ns_alarm::Snapshot& state) {
     xSemaphoreGive(_mutex);
 }
 void NightscoutSession::message(const char* text, bool error) {
-    auto state=alarms(); strlcpy(state.message,text,sizeof(state.message));
+    auto state=thresholds(); strlcpy(state.message,text,sizeof(state.message));
     logs::trimUtf8Tail(state.message); publish(state);
     if (error) logs::logEf("[NS ALARM] %s",text); else logs::logIf("[NS ALARM] %s",text);
 }
@@ -159,7 +157,7 @@ int NightscoutSession::http(const String& path, String& response) {
 }
 bool NightscoutSession::status() {
     String body; int code=http("/api/v1/status.json",body);
-    auto state=alarms();
+    auto state=thresholds();
     if (code!=200) { state.connected=false; publish(state); httpError("Nightscout status",code); return false; }
     const auto invalid = [this,&state](const char* reason) {
         state.connected=false; publish(state); message(reason,true); return false;
@@ -175,31 +173,14 @@ bool NightscoutSession::status() {
     }
     if (!valid_glucose_bounds(state.bounds)) return invalid("Invalid Nightscout thresholds");
     double epoch;
-    if (!number(parser.get("serverTimeEpoch"),epoch) || epoch<1000000000000.0 || epoch>4102444800000.0)
-        return invalid("Status missing valid server time");
-    state.serverEpochMs=uint64_t(epoch); state.clockAtMs=millis();
-    state.preferences=ns_alarm::Preferences{};
-    for (unsigned k=0; k<4; ++k) {
-        auto flag=settings.get(flagNames[k]);
-        if (flag && flag.value()=="false") state.preferences.enabledMask &= ~(1u<<k);
-        auto options=settings.get(minuteNames[k]);
-        if (!options || !options.length()) options=settings.get(k==0 || k==3?"alarmUrgentMins":"alarmWarnMins");
-        if (options && options.length()) {
-            unsigned count=0;
-            for (unsigned i=0; i<options.length() && count<ns_alarm::option_count; ++i) {
-                double value;
-                if (!number(options.get(int(i)),value) || value<1 || value>ns_alarm::max_snooze_minutes || value!=floor(value)) continue;
-                bool duplicate=false;
-                for (unsigned j=0;j<count;++j) if (state.preferences.minutes[k][j]==value) duplicate=true;
-                if (!duplicate) state.preferences.minutes[k][count++]=uint16_t(value);
-            }
-            if (count) state.preferences.counts[k]=count;
-        }
+    // Время сервера — необязательный резерв для часов; импорт порогов от него не зависит.
+    if (number(parser.get("serverTimeEpoch"),epoch) && epoch>=1000000000000.0 && epoch<=4102444800000.0) {
+        state.serverEpochMs=uint64_t(epoch); state.clockAtMs=millis();
     }
-    strlcpy(state.preferences.origin,_config.baseUrl.c_str(),sizeof(state.preferences.origin));
-    state.preferences.loaded=true; state.connected=true;
+    strlcpy(state.origin,_config.baseUrl.c_str(),sizeof(state.origin));
+    state.loaded=true; state.connected=true;
     ++state.revision; publish(state);
-    message("Nightscout thresholds and settings loaded");
+    message("Nightscout glucose thresholds loaded");
     return true;
 }
 void NightscoutSession::run(void* self) { static_cast<NightscoutSession*>(self)->work(); }
@@ -220,7 +201,7 @@ void NightscoutSession::work() {
             if (_client.tick(data)) xQueueOverwrite(_results,&data);
             if (!_client.isBusy()) {
                 const uint32_t now=millis();
-                if (!_lastStatus || uint32_t(now-_lastStatus)>=(alarms().connected?statusPollMs:30000)) { status(); _lastStatus=millis(); }
+                if (!_lastStatus || uint32_t(now-_lastStatus)>=(thresholds().connected?statusPollMs:30000)) { status(); _lastStatus=millis(); }
             }
         } else if (WiFi.status()!=WL_CONNECTED) {
             _client.tick(data); // Дать существующему клиенту отменить незавершённый запрос.

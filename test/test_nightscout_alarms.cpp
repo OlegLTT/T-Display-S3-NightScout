@@ -28,32 +28,21 @@ constexpr bool server_clock_wrap() {
 }
 static_assert(server_clock_wrap(), "Server time remains available for LAN without NTP, including millis wrap");
 
-constexpr bool rejects_invalid_options() {
-    ns_alarm::Preferences settings;
-    if (!settings.valid()) return false;
-    settings.version=2; if (settings.valid()) return false;
-    settings=ns_alarm::Preferences{}; settings.counts[0]=7; if (settings.valid()) return false;
-    settings=ns_alarm::Preferences{}; settings.minutes[1][1]=settings.minutes[1][0]; if (settings.valid()) return false;
-    settings=ns_alarm::Preferences{}; settings.minutes[1][1]=0; if (settings.valid()) return false;
-    settings=ns_alarm::Preferences{}; settings.minutes[1][1]=1441; return !settings.valid();
-}
-static_assert(rejects_invalid_options(),"invalid/corrupt NVS snooze settings must be rejected");
-
 constexpr bool settings_require_live_server() {
     ns_alarm::Snapshot state;
     for (unsigned i=0;i<4;++i) state.bounds[i]=nsBounds[i];
-    state.preferences.loaded=true;
-    state.preferences.origin[0]='a';
-    if (ns_alarm::server_settings_ready(state,"a")) return false;
+    state.loaded=true;
+    state.origin[0]='a';
+    if (ns_alarm::server_bounds_ready(state,"a")) return false;
     state.connected=true;
-    if (!ns_alarm::server_settings_ready(state,"a") || ns_alarm::server_settings_ready(state,"b")) return false;
-    state.preferences.loaded=false;
-    if (ns_alarm::server_settings_ready(state,"a")) return false;
-    state.preferences.loaded=true;
+    if (!ns_alarm::server_bounds_ready(state,"a") || ns_alarm::server_bounds_ready(state,"b")) return false;
+    state.loaded=false;
+    if (ns_alarm::server_bounds_ready(state,"a")) return false;
+    state.loaded=true;
     state.bounds[0]=state.bounds[1];
-    return !ns_alarm::server_settings_ready(state,"a");
+    return !ns_alarm::server_bounds_ready(state,"a");
 }
-static_assert(settings_require_live_server(),"cached NVS settings, a different host or invalid data cannot reveal server bounds");
+static_assert(settings_require_live_server(),"only a valid threshold snapshot from the selected live server can be imported");
 
 static_assert(ns_http::timeout_ms(0)==15000 && ns_http::timeout_ms(15000)==15000,
     "alarm HTTP inherits the configured glucose client timeout");

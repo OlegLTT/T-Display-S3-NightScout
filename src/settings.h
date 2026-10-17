@@ -23,6 +23,7 @@ struct AppSettings {
   // Четыре возрастающие границы глюкозы в ммоль/л.
   float sgvBounds[4] = {app_constants::default_glucose_bounds[0], app_constants::default_glucose_bounds[1], app_constants::default_glucose_bounds[2], app_constants::default_glucose_bounds[3]};
   bool boundsOverridden = false; // Ручные пороги сохраняются вместо фонового импорта.
+  char boundsOrigin[96] = {}; // Сервер, к которому относятся сохранённые пороги.
 
   char hostSite[96] = {0};
   char nsToken[96] = {0};
@@ -31,7 +32,6 @@ struct AppSettings {
 
   // Громкость в процентах: 0 отключает звук, 100 задаёт максимум.
   uint8_t alarmVolume = app_constants::default_volume_percent;
-  ns_alarm::Preferences nsAlarms;
   BatterySource batterySource = app_constants::default_battery_source;
 
   bool isValidBounds() const {
@@ -51,6 +51,7 @@ public:
 
   bool load(AppSettings& out);
   bool save(const AppSettings& s);
+  bool saveBounds(const AppSettings& s);
   bool saveBrightness(uint8_t percent);
 
   bool factoryReset(AppSettings& out);

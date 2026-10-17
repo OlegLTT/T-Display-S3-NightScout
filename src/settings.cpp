@@ -3,6 +3,17 @@
 #include "settings.h"
 #include <nvs_flash.h>
 
+// Читается только при обновлении старой прошивки; серверные флаги и интервалы больше не используются.
+struct LegacyNightscoutAlarms {
+  uint32_t version;
+  bool loaded, overridden;
+  uint8_t enabledMask;
+  uint8_t counts[4];
+  uint16_t minutes[4][6];
+  char origin[96];
+};
+static_assert(sizeof(LegacyNightscoutAlarms) == 156, "Keep the legacy NVS layout for migration");
+
 // Пустое поле удаляется из NVS: putString не различает успех пустой записи и ошибку.
 static bool writeStr(Preferences& p, const char* key, const char* s, size_t maxLen) {
   if (!s) s = "";
@@ -71,12 +82,15 @@ bool SettingsStore::load(AppSettings& out) {
 
   out.onboardingDone = _prefs.getBool("onbDone", false);
   out.alarmVolume = _prefs.getUChar("alarmVolume", app_constants::default_volume_percent);
-  if (_prefs.getBytesLength("nsAlarms") == sizeof(out.nsAlarms)) {
-    _prefs.getBytes("nsAlarms", &out.nsAlarms, sizeof(out.nsAlarms));
-    if (!out.nsAlarms.valid()) out.nsAlarms = ns_alarm::Preferences{};
+  readStr(_prefs, "boundsOrigin", out.boundsOrigin, sizeof(out.boundsOrigin), "");
+  if (!_prefs.isKey("boundsOrigin") && _prefs.getBytesLength("nsAlarms") == sizeof(LegacyNightscoutAlarms)) {
+    LegacyNightscoutAlarms legacy{};
+    _prefs.getBytes("nsAlarms", &legacy, sizeof(legacy));
+    if (legacy.version == 1 && legacy.origin[sizeof(legacy.origin)-1] == 0)
+      strlcpy(out.boundsOrigin, legacy.origin, sizeof(out.boundsOrigin));
   }
   out.boundsOverridden = validBounds && _prefs.getBool("boundsOverride", false)
-      && strcmp(out.nsAlarms.origin, out.hostSite) == 0;
+      && strcmp(out.boundsOrigin, out.hostSite) == 0;
   const uint8_t batterySource = _prefs.getUChar("batterySource",
       static_cast<uint8_t>(app_constants::default_battery_source));
   out.batterySource = valid_battery_source(batterySource)
@@ -93,7 +107,7 @@ bool SettingsStore::load(AppSettings& out) {
 
 // Возвращает ошибку при неудачной записи. Сохранение отдельных ключей не является транзакцией.
 bool SettingsStore::save(const AppSettings& s) {
-  if (!s.nsAlarms.valid()) return false;
+  if (!s.isValidBounds()) return false;
   bool ok = true;
 
   for (int i = 0; i < MAX_WIFI; i++) {
@@ -111,25 +125,34 @@ bool SettingsStore::save(const AppSettings& s) {
   if (ui > 1) ui = 0;
   ok = (_prefs.putUChar("uiScr", ui) > 0) && ok;
 
-  for (int i = 0; i < 4; i++) {
-    char k[12];
-    snprintf(k, sizeof(k), "b%d", i);
-    ok = (_prefs.putFloat(k, s.sgvBounds[i]) > 0) && ok;
-  }
+  ok = saveBounds(s) && ok;
 
   ok = writeStr(_prefs, "host", s.hostSite, sizeof(s.hostSite)) && ok;
   ok = writeStr(_prefs, "nsToken", s.nsToken, sizeof(s.nsToken)) && ok;
 
   ok = (_prefs.putBool("onbDone", s.onboardingDone) > 0) && ok;
   ok = (_prefs.putUChar("alarmVolume", s.alarmVolume) > 0) && ok;
-  ok = (_prefs.putBool("boundsOverride", s.boundsOverridden) > 0) && ok;
-  ok = (_prefs.putBytes("nsAlarms", &s.nsAlarms, sizeof(s.nsAlarms)) == sizeof(s.nsAlarms)) && ok;
   ok = (_prefs.putUChar("batterySource", static_cast<uint8_t>(s.batterySource)) > 0) && ok;
   if (ok && _prefs.isKey("missingAlarm")) ok = _prefs.remove("missingAlarm");
   if (ok && _prefs.isKey("alarmEnable")) ok = _prefs.remove("alarmEnable");
 
   ok = (_prefs.putUChar("br", s.brightness) > 0) && ok;
 
+  return ok;
+}
+
+// Фоновая синхронизация пишет только пороги, не затрагивая локальные настройки устройства.
+bool SettingsStore::saveBounds(const AppSettings& s) {
+  if (!s.isValidBounds()) return false;
+  bool ok = true;
+  for (unsigned i=0; i<4; ++i) {
+    char key[12];
+    snprintf(key,sizeof(key),"b%u",i);
+    ok = (_prefs.putFloat(key,s.sgvBounds[i]) > 0) && ok;
+  }
+  ok = (_prefs.putBool("boundsOverride",s.boundsOverridden) > 0) && ok;
+  ok = writeStr(_prefs,"boundsOrigin",s.boundsOrigin,sizeof(s.boundsOrigin)) && ok;
+  if (ok && _prefs.isKey("nsAlarms")) ok = _prefs.remove("nsAlarms");
   return ok;
 }
 

@@ -40,65 +40,71 @@ const context = vm.createContext({
 });
 vm.runInContext(script, context, { filename: 'embedded-captive-portal.js' });
 const run = code => vm.runInContext(code, context);
-const show = state => { context.state = state; run('showNsState(state,true)'); };
 const input = async id => {
   for (const handler of node(id).listeners.input || []) await handler({ target: node(id) });
 };
 const click = async id => {
   for (const handler of node(id).listeners.click || []) await handler({ currentTarget: node(id) });
 };
-const hidden = () => {
-  assert.equal(node('boundsCard').style.display, 'none');
-  assert.equal(node('alarmCard').style.display, ''); // Volume does not depend on server loading.
+const localFormVisible = () => {
+  assert.notEqual(node('boundsCard').style.display, 'none');
+  assert.equal(node('alarmCard').style.display, '');
 };
 
 (async () => {
-  assert.match(html, /id="boundsCard" style="display:none"/);
-  assert.match(html, /id="alarmCard" style="display:none"/);
+  assert.match(html, /id="boundsCard">/);
   assert.equal(/<input[^>]+id="nsMinutes\d"/.test(html), false);
   assert.equal(/id="(?:soundAlarmEnabled|nsEnabled\d|nsUseServer|testSoundBtn)"/.test(html), false);
   for (let i=0;i<4;++i) {
     assert.match(html, new RegExp('id="b'+i+'" type="text" inputmode="decimal"'));
   }
-  node('host').value = 'server.test'; node('token').value = 'test-token';
-  node('tzSel').value = '0'; node('batterySource').value = '0';
-  const server = { nsAlarmDevice: true, nsAlarmReady: true, nsOrigin: 'server.test',
-    token: 'test-token', boundsOverride: false,
-    bounds: [3.5,4,9,13], serverBounds: [3.5,4,9,13] };
-  node('alarmVolume').value='31';
-  run('soundAlarmSupported = true');
-  show(server); // Background loading cannot reveal either section before the button.
-  hidden();
-  cfg=server;
-  await poll();
-  hidden();
-  // Saving Wi-Fi/time/etc before server loading must not require hidden bounds.
+  node('tzSel').options=[{value:'0'}];
+  const local = { host: 'server.test', token: 'test-token', wifi: [], tzMin: 0, dst: false,
+    batterySource: 0, alarmVolume: 31, soundAlarmSupported: true,
+    expiryMinutes: 15, snoozeMinutes: [30,60,90,120],
+    nsBoundsDevice: true, nsBoundsReady: false, nsOrigin: '', boundsOverride: false,
+    bounds: [3.5,4,9,13], serverBounds: [] };
+  cfg=local;
+  await run('loadCfg()');
+  localFormVisible();
+  assert.equal(node('b0').value, '3.5');
+  assert.equal(node('b0').readOnly, false);
+  // All settings save without any server request or live threshold snapshot.
   await run('saveOnly()');
-  assert.equal(calls.at(-1).options.body.has('b0'), false);
+  assert.equal(calls.some(call=>call.url==='/connect_ns'), false);
+  assert.equal(calls.at(-1).options.body.get('b0'), '3.5');
+  assert.equal(calls.at(-1).options.body.get('boundsOverride'), '0');
   assert.equal(calls.at(-1).options.body.get('alarmVolume'), '31');
   assert.equal(calls.at(-1).options.body.has('soundAlarmEnabled'), false);
 
-  await click('connectNsBtn');
-  hidden(); // An accepted connection request is not a successful settings load.
-  cfg={ ...server, nsAlarmReady: false, bounds: [] };
-  await poll(); hidden();
+  // Only thresholds follow background updates. Local controls and Wi-Fi drafts stay intact.
+  node('alarmVolume').value='64'; await input('alarmVolume');
+  node('tzSel').value='60'; node('dst').value='1'; node('batterySource').value='1';
+  run("slots=[{ssid:'local-wifi',pass:'local-pass',passDirty:true,hasPass:true}]");
+  const server={...local,nsBoundsReady:true,nsOrigin:local.host,
+    bounds:[3.6,4.2,9.2,13.2],serverBounds:[3.6,4.2,9.2,13.2],
+    alarmVolume:99,tzMin:-300,dst:false,batterySource:0,wifi:[{ssid:'other-wifi'}]};
   cfg=server; await poll();
-  assert.equal(node('boundsCard').style.display, '');
-  assert.equal(node('alarmCard').style.display, '');
-  assert.equal(node('b0').value, '3.5');
-  assert.equal(node('b0').readOnly, false);
+  localFormVisible();
+  assert.equal(node('b0').value, '3.6');
   await run('saveOnly()');
   const form = calls.at(-1).options.body;
   assert.equal(form.has('nsEnabled0'), false);
   assert.equal(form.has('nsMinutes0'), false);
-  assert.equal(form.get('b0'), '3.5');
+  assert.equal(form.get('b0'), '3.6');
   assert.equal(form.get('boundsOverride'), '0');
+  assert.equal(form.get('alarmVolume'), '64');
+  assert.equal(form.get('tzOff'), '60');
+  assert.equal(form.get('dst'), '1');
+  assert.equal(form.get('batterySource'), '1');
+  assert.equal(form.get('ssid0'), 'local-wifi');
+  assert.equal(form.get('pass0'), 'local-pass');
 
   // Polling must not move the caret while the user has focused an input.
   context.document.activeElement=node('b0');
-  cfg={...server,bounds:[3.6,4.2,9.2,13.2],serverBounds:[3.6,4.2,9.2,13.2]};
+  cfg={...server,bounds:[3.7,4.3,9.3,13.3],serverBounds:[3.7,4.3,9.3,13.3]};
   await poll();
-  assert.equal(node('b0').value, '3.5');
+  assert.equal(node('b0').value, '3.6');
   context.document.activeElement=null;
 
   // Decimal comma input stays editable, survives polling, and is saved locally.
@@ -108,13 +114,23 @@ const hidden = () => {
   cfg = { ...server, bounds: [3.6,4.2,9.2,13.2], serverBounds: [3.6,4.2,9.2,13.2] };
   await poll();
   assert.equal(node('b0').value, '3.2');
-  assert.equal(node('b1').value, '4.0');
+  assert.equal(node('b1').value, '4.2');
   await run('saveOnly()');
   assert.equal(calls.at(-1).options.body.get('boundsOverride'), '1');
   assert.equal(calls.at(-1).options.body.get('b0'), '3.2');
   node('b0').value='5'; await input('b0');
   await assert.rejects(run('saveOnly()'), /строго возрастать/);
+  node('b0').value='3,2'; await input('b0');
+  // Going offline never hides the form or blocks saving or returning to automatic sync.
+  cfg={...local,boundsOverride:true,bounds:[3.2,4.2,9.2,13.2]}; await poll();
+  localFormVisible();
+  await run('saveOnly()');
+  assert.equal(calls.at(-1).options.body.get('boundsOverride'), '1');
   await click('serverBoundsBtn');
+  await run('saveOnly()');
+  assert.equal(calls.at(-1).options.body.get('boundsOverride'), '0');
+  assert.equal(node('b0').value, '3.2'); // Cached fallback until the server returns.
+  cfg=server; await poll();
   assert.equal(node('b0').value, '3.6');
   // A persisted manual value in /cfg must not undo the return to server bounds.
   cfg={...cfg, boundsOverride:true, bounds:[3.2,4,9,13]}; await poll();
@@ -127,42 +143,47 @@ const hidden = () => {
   assert.equal(node('alarmVolumeValue').textContent, '0%');
 
   // A new page/load shows the saved manual thresholds, not the server defaults.
-  await click('connectNsBtn'); cfg={...server,boundsOverride:true,bounds:[3.2,4,9,13]}; await poll();
+  cfg={...local,boundsOverride:true,bounds:[3.2,4,9,13]}; await run('loadCfg()');
   assert.equal(node('b0').value, '3.2');
   await run('saveOnly()');
   assert.equal(calls.at(-1).options.body.get('boundsOverride'), '1');
 
-  // An old /cfg snapshot must not reveal bounds after editing connection fields.
+  // Old snapshots must not overwrite a draft for another server; the local form remains visible.
   node('host').value = 'other.test'; await input('host');
   cfg = server; await poll();
-  hidden();
+  localFormVisible();
+  assert.equal(node('host').value, 'other.test');
+  assert.equal(node('b0').value, '3.2');
+  await run('saveOnly()');
+  assert.equal(calls.at(-1).options.body.get('host'), 'other.test');
+  assert.equal(calls.at(-1).options.body.get('boundsOverride'), '0');
   node('host').value = 'server.test'; node('token').value = 'new-token';
   await input('token'); await poll();
-  hidden();
-  node('token').value = 'test-token'; show(server);
-  hidden(); // Restoring the original token still requires a new explicit load.
-  await click('connectNsBtn'); cfg=server; await poll();
-  cfg = { ...server, nsAlarmReady: false, bounds: [] }; await poll();
-  hidden();
+  localFormVisible();
+  assert.equal(node('token').value, 'new-token');
+  node('token').value = 'test-token'; await input('token');
 
-  // Failed requests must not reveal settings cached by the background session.
-  connectOk=false; await click('connectNsBtn'); show(server); hidden();
-  connectOk=true; await click('connectNsBtn'); cfg=server; await poll();
+  // An optional threshold refresh can fail without blocking local settings.
+  connectOk=false; await click('connectNsBtn'); localFormVisible();
+  await run('saveOnly()');
+  connectOk=true;
+  cfg=local; await run('loadCfg()');
 
-  // An old JSON body arriving after another load cannot reveal the old settings.
+  // A JSON body arriving after a new refresh request cannot restore the old server state.
   let release;
   nextCfgBody=new Promise(resolve => { release=resolve; });
   const bodyStarted=new Promise(resolve => { cfgBodyStarted=resolve; });
   const stale=poll(); await bodyStarted;
-  await click('connectNsBtn'); hidden();
-  release(server); await stale; hidden();
-  cfg={ ...server, nsAlarmReady: false, bounds: [] }; await poll(); hidden();
+  await click('connectNsBtn'); localFormVisible();
+  release(server); await stale;
+  assert.equal(node('b0').value, '3.5');
+  cfg=local; await poll(); localFormVisible();
   cfg=server; await poll();
   assert.equal(node('alarmCard').style.display, '');
 
-  // Boards without Nightscout alarm support retain the manual threshold form.
-  show({ nsAlarmDevice: false, nsAlarmReady: false });
-  assert.equal(node('boundsCard').style.display, '');
+  // Boards without threshold sync retain the same local editable form.
+  cfg={...local,nsBoundsDevice:false}; await run('loadCfg()');
+  localFormVisible();
   assert.equal(node('b0').readOnly, false);
   [3,4,10,14].forEach((value,i) => node('b'+i).value = String(value));
   await run('saveOnly()');

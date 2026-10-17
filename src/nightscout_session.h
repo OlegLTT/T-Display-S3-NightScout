@@ -15,7 +15,7 @@ public:
     bool isBusy() const;
     bool isUpdateWanted() const;
     uint32_t lastRequestAtMs() const;
-    ns_alarm::Snapshot alarms() const;
+    ns_alarm::Snapshot thresholds() const;
 
 private:
     mutable SemaphoreHandle_t _mutex = nullptr;

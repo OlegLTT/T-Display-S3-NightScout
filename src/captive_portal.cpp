@@ -203,7 +203,8 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 </head>
 <body>
 <div class="wrap">
-  <div class="title">Настройка</div>
+  <div class="title">Настройки устройства</div>
+  <div class="muted">Настройки сохраняются на этом устройстве. Из Nightscout обновляются только пороги глюкозы.</div>
 
   <div class="card">
     <div style="font-size:16px; font-weight:650; margin-bottom:6px;">
@@ -290,10 +291,10 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   </div>
 
   <div class="card" id="nsConnectCard" style="display:none">
-    <button class="btn" id="connectNsBtn" type="button">Загрузить настройки из Nightscout</button>
+    <button class="btn" id="connectNsBtn" type="button">Обновить пороги из Nightscout</button>
     <div class="muted" id="nsConnectStatus" role="status">Укажите сервер, токен и домашний Wi-Fi выше.</div>
   </div>
-  <div class="card" id="boundsCard" style="display:none">
+  <div class="card" id="boundsCard">
     <div style="font-size:16px; font-weight:650;">Пороги глюкозы (ммоль/л)</div>
 
     <div class="band" id="band" style="margin-top:10px;">
@@ -356,58 +357,54 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     alarmVolumeValue.textContent = alarmVolume.value + '%';
   });
   let soundAlarmSupported = false;
-  let nsAlarmDevice = false;
-  let nsAlarmReady = false;
+  let nsBoundsDevice = false;
+  let nsBoundsReady = false;
   let boundsDirty = false;
   let boundsOverridden = false;
   let serverBounds = [];
-  let nsLoadRequested = false;
+  let cfgLoaded = false;
+  let localHost = '';
   let nsLoadEpoch = 0;
 
   function resetNsLoad() {
-    nsLoadRequested=false;
     ++nsLoadEpoch;
-    nsAlarmReady=false;
-    document.getElementById('boundsCard').style.display='none';
-    boundsDirty=false;
-    boundsOverridden=false;
+    nsBoundsReady=false;
     serverBounds=[];
+    updateBoundsNotice();
   }
 
   function updateBoundsNotice() {
     document.getElementById('nsBoundsNotice').textContent = boundsOverridden
         ? 'Ручные пороги сохраняются только на этом устройстве и не меняют Nightscout или другие устройства.'
         : 'Пороги обновляются из Nightscout. Редактирование сохраняет ручные значения только на этом устройстве.';
-    document.getElementById('serverBoundsBtn').style.display = nsAlarmReady && boundsOverridden ? '' : 'none';
+    document.getElementById('serverBoundsBtn').style.display = nsBoundsDevice && boundsOverridden ? '' : 'none';
   }
 
   function showNsState(j) {
-    nsAlarmDevice = !!j.nsAlarmDevice;
-    nsAlarmReady = nsLoadRequested && !!j.nsAlarmReady && j.nsOrigin === sanitizeHost(document.getElementById('host').value)
+    nsBoundsDevice = !!j.nsBoundsDevice;
+    const sameConnection = j.host === sanitizeHost(document.getElementById('host').value)
         && j.token === document.getElementById('token').value.trim();
-    document.getElementById('nsConnectCard').style.display = nsAlarmDevice ? '' : 'none';
-    document.getElementById('boundsCard').style.display = !nsAlarmDevice || nsAlarmReady ? '' : 'none';
+    nsBoundsReady = sameConnection && !!j.nsBoundsReady && j.nsOrigin === j.host;
+    serverBounds = nsBoundsReady ? j.serverBounds : [];
+    document.getElementById('nsConnectCard').style.display = nsBoundsDevice ? '' : 'none';
     document.getElementById('alarmCard').style.display = soundAlarmSupported ? '' : 'none';
-    document.getElementById('nsBoundsNotice').style.display = nsAlarmDevice ? '' : 'none';
-    document.getElementById('nsConnectStatus').textContent = nsAlarmDevice && !nsLoadRequested
-        ? 'Нажмите «Загрузить», чтобы показать пороги глюкозы.'
-        : j.nsMessage || (nsAlarmReady ? 'Настройки загружены.' : 'Подключение к серверу…');
-    if (nsAlarmDevice && nsAlarmReady) {
-      serverBounds=j.serverBounds;
-      if ((!boundsDirty || !boundsOverridden) && !boundsInputs.includes(document.activeElement)) {
-        if (!boundsDirty) boundsOverridden=!!j.boundsOverride;
-        const values=boundsDirty ? serverBounds : j.bounds;
-        values.forEach((value,i)=>document.getElementById('b'+i).value=Number(value).toFixed(1));
-      }
+    document.getElementById('nsBoundsNotice').style.display = nsBoundsDevice ? '' : 'none';
+    document.getElementById('nsConnectStatus').textContent = nsBoundsReady
+        ? 'Пороги Nightscout получены.'
+        : 'Локальные настройки доступны без сервера. Пороги обновятся при подключении к Nightscout.';
+    if (sameConnection && (!boundsDirty || (!boundsOverridden && nsBoundsReady))
+        && !boundsInputs.includes(document.activeElement)) {
+      if (!boundsDirty) boundsOverridden=!!j.boundsOverride;
+      const values=boundsDirty ? serverBounds : j.bounds;
+      values.forEach((value,i)=>document.getElementById('b'+i).value=Number(value).toFixed(1));
       updateGradient();
     }
     updateBoundsNotice();
   }
   document.getElementById('serverBoundsBtn').addEventListener('click',()=>{
-    if (!nsAlarmReady || serverBounds.length!==4) return;
     boundsDirty=true;
     boundsOverridden=false;
-    serverBounds.forEach((value,i)=>document.getElementById('b'+i).value=Number(value).toFixed(1));
+    if (nsBoundsReady) serverBounds.forEach((value,i)=>document.getElementById('b'+i).value=Number(value).toFixed(1));
     updateBoundsNotice();
   });
   document.getElementById('connectNsBtn').addEventListener('click',async()=>{
@@ -424,12 +421,11 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       const response=await fetch('/connect_ns',{method:'POST',body:form});
       if (epoch!==nsLoadEpoch) return;
       if (!response.ok) throw new Error(await response.text());
-      nsLoadRequested=true;
       status.textContent='Подключение к серверу…';
     } catch(error) { if (epoch===nsLoadEpoch) status.textContent=error.message; }
   });
   setInterval(async()=>{
-    if (!nsAlarmDevice || !nsLoadRequested) return;
+    if (!nsBoundsDevice || !cfgLoaded) return;
     const epoch=nsLoadEpoch;
     try {
       const response=await fetch('/cfg',{cache:'no-store'});
@@ -449,9 +445,14 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   const hostInp = document.getElementById('host');
   const tokenInp = document.getElementById('token');
   for (const input of [hostInp,tokenInp]) input.addEventListener('input',()=>{
-    if (!nsAlarmDevice) return;
+    if (!nsBoundsDevice) return;
     resetNsLoad();
-    document.getElementById('nsConnectStatus').textContent='Настройки подключения изменены. Нажмите «Загрузить».';
+    if (input===hostInp && sanitizeHost(hostInp.value)!==localHost) {
+      boundsOverridden=false;
+      boundsDirty=true;
+      updateBoundsNotice();
+    }
+    document.getElementById('nsConnectStatus').textContent='Настройки подключения изменены. Сохраните их или нажмите «Обновить пороги».';
   });
 
 
@@ -714,6 +715,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     if (epoch!==nsLoadEpoch) return;
 
     hostInp.value = sanitizeHost(j.host || "");
+    localHost=hostInp.value;
     tokenInp.value = (j.token || "");
 
     slots = (j.wifi || []).map((w,idx)=>({
@@ -750,11 +752,14 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       tzM.value = String(a%60);
     }
 
-    if(!j.nsAlarmDevice && Array.isArray(j.bounds) && j.bounds.length===4){
+    boundsOverridden=!!j.boundsOverride;
+    boundsDirty=false;
+    if(Array.isArray(j.bounds) && j.bounds.length===4){
       j.bounds.forEach((v,i)=>boundsInputs[i].value = Number(v).toFixed(1));
     }
     updateGradient();
     showNsState(j);
+    cfgLoaded=true;
   }
 
   // Отправка настроек и выход из портала.
@@ -762,13 +767,12 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     msgEl.textContent='';
     msgEl.className='msg';
 
-    const editBounds = !nsAlarmDevice || nsAlarmReady;
-    const nums = !editBounds ? [] : boundsInputs.map((el,idx)=>{
+    const nums = boundsInputs.map((el,idx)=>{
       const v = el.value.trim().replace(',', '.');
       if(!/^\d+(\.\d)?$/.test(v)) throw new Error(`Граница ${idx+1}: число с 1 десятичным знаком`);
       return parseFloat(v);
     });
-    if(editBounds && !validateBounds(nums)) throw new Error('Границы должны строго возрастать');
+    if(!validateBounds(nums)) throw new Error('Границы должны строго возрастать');
 
     const form = new URLSearchParams();
     for(let i=0;i<slots.length;i++){
@@ -796,7 +800,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     form.set('dst', dst.value === '1' ? '1' : '0');
     form.set('batterySource', document.getElementById('batterySource').value);
     if (soundAlarmSupported) form.set('alarmVolume', alarmVolume.value);
-    if (nsAlarmDevice && nsAlarmReady) {
+    if (nsBoundsDevice) {
       form.set('boundsOverride',boundsOverridden?'1':'0');
     }
     nums.forEach((v,i)=>form.set('b'+i, v.toFixed(1)));
@@ -1234,13 +1238,13 @@ void CaptivePortal::handleCfg() {
   j += "\"alarmVolume\":" + String(_settings->alarmVolume) + ",";
   j += "\"boundsOverride\":" + String(_settings->boundsOverridden ? "true" : "false") + ",";
 #if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
-  j += "\"nsAlarmDevice\":true,";
+  j += "\"nsBoundsDevice\":true,";
 #else
-  j += "\"nsAlarmDevice\":false,";
+  j += "\"nsBoundsDevice\":false,";
 #endif
-  const bool nsReady=ns_alarm::server_settings_ready(_nsState,_settings->hostSite);
-  j += "\"nsAlarmReady\":" + String(nsReady?"true":"false") + ",";
-  j += "\"nsOrigin\":\"" + escJson(_nsState.preferences.origin) + "\",";
+  const bool nsReady=ns_alarm::server_bounds_ready(_nsState,_settings->hostSite);
+  j += "\"nsBoundsReady\":" + String(nsReady?"true":"false") + ",";
+  j += "\"nsOrigin\":\"" + escJson(_nsState.origin) + "\",";
   j += "\"nsMessage\":\"" + escJson(_nsState.message) + "\",";
   j += "\"batterySource\":" + String(static_cast<uint8_t>(_settings->batterySource)) + ",";
   j += "\"expiryMinutes\":" + String(app_constants::data_expiry_seconds / 60) + ",";
@@ -1256,14 +1260,8 @@ void CaptivePortal::handleCfg() {
   j += "\"soundAlarmSupported\":false,";
 #endif
   j += "\"bounds\":[";
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
-  const float* bounds=_settings->boundsOverridden ? _settings->sgvBounds : _nsState.bounds;
-  const bool showBounds=nsReady;
-#else
   const float* bounds=_settings->sgvBounds;
-  const bool showBounds=true;
-#endif
-  if (showBounds) for (unsigned i=0;i<4;++i) { if (i) j+=','; j+=String(bounds[i],1); }
+  for (unsigned i=0;i<4;++i) { if (i) j+=','; j+=String(bounds[i],1); }
   j += ']';
   j += ",\"serverBounds\":[";
   if (nsReady) for (unsigned i=0;i<4;++i) { if (i) j+=','; j+=String(_nsState.bounds[i],1); }
@@ -1334,13 +1332,12 @@ void CaptivePortal::handleSave() {
 
   if (strcmp(s.hostSite,_settings->hostSite)!=0) {
     s.boundsOverridden=false;
-    s.nsAlarms=ns_alarm::Preferences{};
+    s.boundsOrigin[0]=0;
   }
 
 #if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
-  const bool nsReady=ns_alarm::server_settings_ready(_nsState,s.hostSite)
+  const bool nsReady=ns_alarm::server_bounds_ready(_nsState,s.hostSite)
       && strcmp(s.nsToken,_settings->nsToken)==0;
-  if (nsReady) s.nsAlarms=_nsState.preferences;
 #endif
 
   bool hasBounds=_srv.hasArg("boundsOverride");
@@ -1361,11 +1358,10 @@ void CaptivePortal::handleSave() {
     s.boundsOverridden=overrideValue=="1";
 #if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
     if (!s.boundsOverridden) {
-      if (!nsReady) { _srv.send(409,"text/plain; charset=utf-8","Сначала загрузите пороги Nightscout."); return; }
-      memcpy(s.sgvBounds,_nsState.bounds,sizeof(s.sgvBounds));
+      if (nsReady) memcpy(s.sgvBounds,_nsState.bounds,sizeof(s.sgvBounds));
     }
-    strlcpy(s.nsAlarms.origin,s.hostSite,sizeof(s.nsAlarms.origin));
 #endif
+    strlcpy(s.boundsOrigin,s.hostSite,sizeof(s.boundsOrigin));
   }
 
   s.onboardingDone = true;
