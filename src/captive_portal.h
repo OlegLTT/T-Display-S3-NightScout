@@ -1,4 +1,4 @@
-// Точка доступа и веб-настройки: DNS-перенаправление, сохранение параметров и тест звука.
+// Точка доступа и веб-настройки: DNS-перенаправление и сохранение параметров.
 #pragma once
 #include "app_constants.h"
 #include <Arduino.h>
@@ -23,22 +23,12 @@ public:
     settings = _connectionDraft; _connectionPending = false; return true;
   }
 
-  // Забирает запрос один раз; громкость теста сама по себе не сохраняется.
-  bool takeSoundTest(uint8_t& volume) {
-    if (!_soundTestPending) return false;
-    _soundTestPending = false;
-    volume = _soundTestVolume;
-    return true;
-  }
-
   const String& apSsid() const { return _apSsid; }
   const String& apPass() const { return _apPass; }
   IPAddress apIP() const { return _apIP; }
 
 private:
   bool _active = false;
-  bool _soundTestPending = false;
-  uint8_t _soundTestVolume = 0;
   ns_alarm::Snapshot _nsState;
   AppSettings _connectionDraft;
   bool _connectionPending = false;
@@ -66,5 +56,4 @@ private:
   void handleSave();
   bool readConnectionForm(AppSettings& settings);
 
-  static float toF(const String& s);
 };

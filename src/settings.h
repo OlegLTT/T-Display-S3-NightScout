@@ -22,12 +22,12 @@ struct AppSettings {
 
   // Четыре возрастающие границы глюкозы в ммоль/л.
   float sgvBounds[4] = {app_constants::default_glucose_bounds[0], app_constants::default_glucose_bounds[1], app_constants::default_glucose_bounds[2], app_constants::default_glucose_bounds[3]};
+  bool boundsOverridden = false; // Ручные пороги сохраняются вместо фонового импорта.
 
   char hostSite[96] = {0};
   char nsToken[96] = {0};
 
   bool onboardingDone = false;
-  bool soundAlarmEnabled = app_constants::default_alarm_enabled;
 
   // Громкость в процентах: 0 отключает звук, 100 задаёт максимум.
   uint8_t alarmVolume = app_constants::default_volume_percent;

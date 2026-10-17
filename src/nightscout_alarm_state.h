@@ -16,7 +16,7 @@ constexpr unsigned index(Kind kind) { return static_cast<unsigned>(kind) - 1; }
 struct Preferences {
     uint32_t version = 1;
     bool loaded = false;
-    bool overridden = false;
+    bool overridden = false; // Сохранено для совместимости NVS; флаги сервера не управляют звуком.
     uint8_t enabledMask = 15;
     uint8_t counts[4] = {3, 4, 4, 4};
     uint16_t minutes[4][option_count] = {{15,30,45}, {15,30,45,60}, {30,60,90,120}, {30,60,90,120}};
@@ -40,14 +40,11 @@ struct Preferences {
 
 // Пороги в status.settings.thresholds нормализованы Nightscout в mg/dl независимо от units.
 constexpr float mgdl_to_mmol(float value) { return value / 18.01559f; }
-constexpr Kind classify(float glucose, int32_t age, const float* bounds, uint8_t enabledMask) {
+constexpr Kind classify(float glucose, int32_t age, const float* bounds) {
     // Звуковая тревога совпадает с красной зоной дисплея, включая крайние границы.
     return age < 0 || age >= max_age_seconds || glucose != glucose || glucose > 100
         || !glucose_zone_is_red(glucose_zone(glucose,bounds)) ? Kind::None
-        : (enabledMask & 1) && glucose <= bounds[0] ? Kind::UrgentLow
-        : (enabledMask & 2) && glucose < bounds[1] ? Kind::Low
-        : (enabledMask & 8) && glucose >= bounds[3] ? Kind::UrgentHigh
-        : (enabledMask & 4) && glucose > bounds[2] ? Kind::High : Kind::None;
+        : glucose <= bounds[0] ? Kind::UrgentLow : Kind::UrgentHigh;
 }
 
 struct Snapshot {
@@ -73,26 +70,6 @@ bool server_settings_ready(const Snapshot& state, const char* origin) {
         if (!origin[i]) return true;
     }
     return false;
-}
-
-// Локальное переопределение относится только к флагам типов тревог.
-#if __cplusplus >= 201402L
-constexpr
-#else
-inline
-#endif
-Preferences import_preferences(const Preferences& server, const Preferences& saved) {
-    Preferences result=server;
-    bool sameOrigin=true;
-    for (unsigned i=0; i<sizeof(server.origin); ++i) {
-        if (server.origin[i]!=saved.origin[i]) { sameOrigin=false; break; }
-        if (!server.origin[i]) break;
-    }
-    if (sameOrigin && saved.overridden && saved.valid()) {
-        result.overridden=true;
-        result.enabledMask=saved.enabledMask;
-    }
-    return result;
 }
 
 constexpr uint64_t server_now(const Snapshot& state, uint32_t now) {

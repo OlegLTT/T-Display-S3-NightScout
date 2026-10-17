@@ -44,7 +44,6 @@ constexpr size_t http_header_max_bytes = 1024; // Максимальная дл�
 constexpr float default_glucose_bounds[] = {3.9f, 4.5f, 8.5f, 10.0f};
 constexpr int16_t default_timezone_minutes = 0; // UTC; восточные смещения положительны.
 constexpr bool default_dst = false;
-constexpr bool default_alarm_enabled = false; // Одна настройка для красной зоны и потери данных.
 constexpr uint8_t default_volume_percent = 31; // 0 — тишина, 100 — максимум.
 // Источник значка батареи по умолчанию: Blueberry — загрузчик, Pump — помпа.
 // Сохранённый выбор в настройках имеет приоритет. Используются проценты, не вольты.
@@ -63,7 +62,6 @@ constexpr uint32_t alarm_frequency_hz = 1800; // Встроенный динам
 constexpr uint32_t alarm_beep_ms = 180;
 constexpr uint32_t alarm_second_beep_ms = 360;
 constexpr uint32_t alarm_repeat_ms = 4000;
-constexpr uint32_t sound_test_ms = 600; // Окно теста в настройках; отсрочку не меняет.
 constexpr uint8_t cores3_initial_volume = 80; // Аппаратная шкала 0..255 до первого обновления настроек.
 
 // GPIO13 T-Display: установлен пассивный трёхконтактный модуль с входом active LOW.

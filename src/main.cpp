@@ -175,6 +175,7 @@ static void changeBacklight() {
 
 #if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
 static AlarmState alarmState;
+static MissingDataAlarm missingDataAlarm;
 static SnoozeLan snoozeLan;
 static void tickAlarm();
 static void publishAlarm(uint32_t now);
@@ -406,14 +407,12 @@ static void tickNightscout() {
   if (nsAlarmSnapshot.connected && imported.loaded && imported.valid()
       && strcmp(imported.origin,appCfg.hostSite)==0 && nsImportedRevision!=nsAlarmSnapshot.revision) {
     nsImportedRevision=nsAlarmSnapshot.revision;
-    const auto next=ns_alarm::import_preferences(imported,appCfg.nsAlarms);
-    const bool changed=!appCfg.nsAlarms.loaded || appCfg.nsAlarms.enabledMask!=next.enabledMask
-        || appCfg.nsAlarms.overridden!=next.overridden
-        || memcmp(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds))!=0
+    const bool changed=!appCfg.nsAlarms.loaded
+        || (!appCfg.boundsOverridden && memcmp(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds))!=0)
         || memcmp(appCfg.nsAlarms.counts,imported.counts,sizeof(imported.counts))!=0
         || memcmp(appCfg.nsAlarms.minutes,imported.minutes,sizeof(imported.minutes))!=0;
-    appCfg.nsAlarms=next;
-    memcpy(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds));
+    appCfg.nsAlarms=imported;
+    if (!appCfg.boundsOverridden) memcpy(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds));
     if (changed && !portal.active() && !settingsStore.save(appCfg)) logs::logE("[NS ALARM] Failed to save settings to NVS");
     if (changed) logs::logI("[NS ALARM] Thresholds and alarm settings loaded");
     needUpdateScreen=true;
@@ -455,6 +454,7 @@ static void tickPortal() {
 #if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
   AppSettings draft;
   if (portal.takeConnectionRequest(draft)) {
+    if (strcmp(draft.hostSite,appCfg.hostSite)!=0) draft.boundsOverridden=false;
     appCfg=draft;
     if (strcmp(appCfg.nsAlarms.origin,appCfg.hostSite)!=0) appCfg.nsAlarms=ns_alarm::Preferences{};
     haveLastGood=false; nsData=NightscoutData{}; nsImportedRevision=0;
@@ -588,58 +588,46 @@ static uint64_t snoozeEpoch(uint32_t now) {
   return ns_alarm::server_now(nsAlarmSnapshot, now) / 1000;
 }
 
-// Реальная тревога управляет подсветкой; тест звука не изменяет отсрочку.
+// Единственная настройка звука — громкость; Snooze подавляет оба условия тревоги.
 static void publishAlarm(uint32_t now) {
   const uint8_t severity=ns_alarm::level(nsAlarmKind);
   const uint32_t remaining=alarmState.remaining_seconds(now);
-  const bool sounding=appCfg.soundAlarmEnabled && severity && !remaining;
+  const bool enabled=appCfg.alarmVolume>0;
+  const bool sounding=alarmState.should_sound(now);
   backlight.setAlarmBoost(sounding);
   auto& display = gfx::Display::instance();
-  static bool testing = false;
-  static uint32_t testStarted = 0;
-  static uint8_t testVolume = 0;
-  if (portal.takeSoundTest(testVolume)) {
-    display.set_alarm_sound(false);
-    testing = true;
-    testStarted = now;
-  }
-
-  // После теста возвращаются сохранённая громкость и обычное состояние тревоги.
-  if (testing && (!portal.active() || uint32_t(now - testStarted) >= app_constants::sound_test_ms)) {
-    display.set_alarm_sound(false);
-    testing = false;
-  }
-  display.set_alarm_volume(testing ? testVolume : appCfg.alarmVolume);
+  display.set_alarm_volume(appCfg.alarmVolume);
 #if defined(BOARD_TDISPLAY_S3)
-  buzzer::setAlarm(testing || sounding, !testing && severity==2);
+  buzzer::setAlarm(sounding, severity==2);
 #else
-  display.set_alarm_sound(testing || sounding);
+  display.set_alarm_sound(sounding);
 #endif
   const auto& data=haveLastGood?lastGood:nsData;
   const int32_t age=computeAgeSec(data.update_time_ms);
-  ui_navigation::set_alarm_status(appCfg.soundAlarmEnabled,
+  ui_navigation::set_alarm_status(enabled,
       data.ok && age>=0 && age<ns_alarm::max_age_seconds, sounding, display.alarm_sound_available(),
-      remaining, alarmState.snooze_minutes(), false, severity==2);
+      remaining, alarmState.snooze_minutes(), alarmState.data_missing(), severity==2);
   static bool audioErrorLogged = false;
-  if (appCfg.soundAlarmEnabled && !display.alarm_sound_available() && !audioErrorLogged) {
+  if (enabled && !display.alarm_sound_available() && !audioErrorLogged) {
     logs::logE("[ALARM] Audio device unavailable");
     audioErrorLogged = true;
   }
 }
 
-// Обе платы используют серверные пороги и флаги тревог по данным моложе 10 минут.
+// Красные зоны по свежим данным либо 15 минут без измерений, независимо от флагов Nightscout.
 static void tickAlarm() {
   const auto& data = haveLastGood ? lastGood : nsData;
   const int32_t age = computeAgeSec(data.update_time_ms);
   const auto previous=nsAlarmKind;
-  nsAlarmKind=data.ok && appCfg.nsAlarms.loaded && strcmp(appCfg.nsAlarms.origin,appCfg.hostSite)==0
-      ? ns_alarm::classify(data.sgv_mmol,age,appCfg.sgvBounds,appCfg.nsAlarms.enabledMask) : ns_alarm::Kind::None;
+  nsAlarmKind=data.ok ? ns_alarm::classify(data.sgv_mmol,age,appCfg.sgvBounds) : ns_alarm::Kind::None;
   static const char* const names[]={"none", "critical low", "low", "high", "critical high"};
   if (nsAlarmKind!=previous) logs::logIf("[NS ALARM] %s; glucose=%.1f, age=%ld s",
       names[unsigned(nsAlarmKind)],data.sgv_mmol,(long)age);
   const uint32_t now = millis();
-  alarmState.update(now, appCfg.soundAlarmEnabled, data.ok && age >= 0 && age < ns_alarm::max_age_seconds,
-                    nsAlarmKind != ns_alarm::Kind::None);
+  const bool missing=missingDataAlarm.update(now,data.ok ? age : INT32_MAX);
+  const bool enabled=appCfg.alarmVolume>0;
+  alarmState.update(now, enabled, data.ok && age >= 0 && age < ns_alarm::max_age_seconds,
+                    nsAlarmKind != ns_alarm::Kind::None, enabled, missing);
   snoozeLan.tick(alarmState, appCfg.hostSite, snoozeEpoch(now), now);
   publishAlarm(now);
 }

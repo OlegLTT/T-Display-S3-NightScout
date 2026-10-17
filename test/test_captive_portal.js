@@ -49,18 +49,23 @@ const click = async id => {
 };
 const hidden = () => {
   assert.equal(node('boundsCard').style.display, 'none');
-  assert.equal(node('alarmCard').style.display, 'none');
+  assert.equal(node('alarmCard').style.display, ''); // Volume does not depend on server loading.
 };
 
 (async () => {
   assert.match(html, /id="boundsCard" style="display:none"/);
   assert.match(html, /id="alarmCard" style="display:none"/);
   assert.equal(/<input[^>]+id="nsMinutes\d"/.test(html), false);
+  assert.equal(/id="(?:soundAlarmEnabled|nsEnabled\d|nsUseServer|testSoundBtn)"/.test(html), false);
+  for (let i=0;i<4;++i) {
+    assert.match(html, new RegExp('id="b'+i+'" type="text" inputmode="decimal"'));
+  }
   node('host').value = 'server.test'; node('token').value = 'test-token';
   node('tzSel').value = '0'; node('batterySource').value = '0';
   const server = { nsAlarmDevice: true, nsAlarmReady: true, nsOrigin: 'server.test',
-    token: 'test-token', nsOverride: false, nsEnabled: [true,true,true,true],
-    bounds: [3.5,4,9,13] };
+    token: 'test-token', boundsOverride: false,
+    bounds: [3.5,4,9,13], serverBounds: [3.5,4,9,13] };
+  node('alarmVolume').value='31';
   run('soundAlarmSupported = true');
   show(server); // Background loading cannot reveal either section before the button.
   hidden();
@@ -70,6 +75,8 @@ const hidden = () => {
   // Saving Wi-Fi/time/etc before server loading must not require hidden bounds.
   await run('saveOnly()');
   assert.equal(calls.at(-1).options.body.has('b0'), false);
+  assert.equal(calls.at(-1).options.body.get('alarmVolume'), '31');
+  assert.equal(calls.at(-1).options.body.has('soundAlarmEnabled'), false);
 
   await click('connectNsBtn');
   hidden(); // An accepted connection request is not a successful settings load.
@@ -79,30 +86,51 @@ const hidden = () => {
   assert.equal(node('boundsCard').style.display, '');
   assert.equal(node('alarmCard').style.display, '');
   assert.equal(node('b0').value, '3.5');
-  assert.equal(node('b0').readOnly, true);
+  assert.equal(node('b0').readOnly, false);
   await run('saveOnly()');
   const form = calls.at(-1).options.body;
-  assert.equal(form.get('nsEnabled0'), '1');
+  assert.equal(form.has('nsEnabled0'), false);
   assert.equal(form.has('nsMinutes0'), false);
-  assert.equal(form.has('b0'), false);
+  assert.equal(form.get('b0'), '3.5');
+  assert.equal(form.get('boundsOverride'), '0');
 
-  // Both supported boards use this server-backed menu. Local alarm flags must
-  // survive polling while fresh thresholds continue to follow Nightscout.
-  node('nsEnabled0').checked = false;
-  await input('nsEnabled0');
-  assert.equal(node('nsUseServer').checked, false);
-  cfg = { ...server, bounds: [3.6,4.2,9.2,13.2] };
+  // Polling must not move the caret while the user has focused an input.
+  context.document.activeElement=node('b0');
+  cfg={...server,bounds:[3.6,4.2,9.2,13.2],serverBounds:[3.6,4.2,9.2,13.2]};
   await poll();
-  assert.equal(node('nsEnabled0').checked, false);
+  assert.equal(node('b0').value, '3.5');
+  context.document.activeElement=null;
+
+  // Decimal comma input stays editable, survives polling, and is saved locally.
+  node('b0').value='3,2';
+  await input('b0');
+  assert.equal(node('b0').value, '3.2');
+  cfg = { ...server, bounds: [3.6,4.2,9.2,13.2], serverBounds: [3.6,4.2,9.2,13.2] };
+  await poll();
+  assert.equal(node('b0').value, '3.2');
+  assert.equal(node('b1').value, '4.0');
+  await run('saveOnly()');
+  assert.equal(calls.at(-1).options.body.get('boundsOverride'), '1');
+  assert.equal(calls.at(-1).options.body.get('b0'), '3.2');
+  node('b0').value='5'; await input('b0');
+  await assert.rejects(run('saveOnly()'), /строго возрастать/);
+  await click('serverBoundsBtn');
+  assert.equal(node('b0').value, '3.6');
+  // A persisted manual value in /cfg must not undo the return to server bounds.
+  cfg={...cfg, boundsOverride:true, bounds:[3.2,4,9,13]}; await poll();
   assert.equal(node('b0').value, '3.6');
   await run('saveOnly()');
-  assert.equal(calls.at(-1).options.body.get('nsOverride'), '1');
-  assert.equal(calls.at(-1).options.body.get('nsEnabled0'), '0');
-  assert.equal(calls.at(-1).options.body.has('b0'), false);
-  node('nsUseServer').checked = true;
-  await input('nsUseServer');
+  assert.equal(calls.at(-1).options.body.get('boundsOverride'), '0');
+  node('alarmVolume').value='0'; await input('alarmVolume');
   await run('saveOnly()');
-  assert.equal(calls.at(-1).options.body.get('nsOverride'), '0');
+  assert.equal(calls.at(-1).options.body.get('alarmVolume'), '0');
+  assert.equal(node('alarmVolumeValue').textContent, '0%');
+
+  // A new page/load shows the saved manual thresholds, not the server defaults.
+  await click('connectNsBtn'); cfg={...server,boundsOverride:true,bounds:[3.2,4,9,13]}; await poll();
+  assert.equal(node('b0').value, '3.2');
+  await run('saveOnly()');
+  assert.equal(calls.at(-1).options.body.get('boundsOverride'), '1');
 
   // An old /cfg snapshot must not reveal bounds after editing connection fields.
   node('host').value = 'other.test'; await input('host');

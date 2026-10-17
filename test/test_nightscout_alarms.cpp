@@ -3,26 +3,21 @@
 #include <limits>
 
 constexpr float nsBounds[] = {3.0f,4.0f,10.0f,14.0f};
-static_assert(ns_alarm::classify(2.9f,30,nsBounds,15)==ns_alarm::Kind::UrgentLow,"critical low");
-static_assert(ns_alarm::classify(3.5f,30,nsBounds,15)==ns_alarm::Kind::None,"low yellow zone must stay silent");
-static_assert(ns_alarm::classify(11.f,30,nsBounds,15)==ns_alarm::Kind::None,"high yellow zone must stay silent");
-static_assert(ns_alarm::classify(3.f,30,nsBounds,15)==ns_alarm::Kind::UrgentLow,"exact low red boundary must sound");
-static_assert(ns_alarm::classify(14.f,30,nsBounds,15)==ns_alarm::Kind::UrgentHigh,"exact high red boundary must sound");
-static_assert(ns_alarm::classify(3.001f,30,nsBounds,15)==ns_alarm::Kind::None,"just above low red boundary is silent");
-static_assert(ns_alarm::classify(13.999f,30,nsBounds,15)==ns_alarm::Kind::None,"just below high red boundary is silent");
-static_assert(ns_alarm::classify(4.f,30,nsBounds,15)==ns_alarm::Kind::None,"inner low boundary is silent");
-static_assert(ns_alarm::classify(10.f,30,nsBounds,15)==ns_alarm::Kind::None,"inner high boundary is silent");
-static_assert(ns_alarm::classify(15.f,30,nsBounds,15)==ns_alarm::Kind::UrgentHigh,"critical high");
-static_assert(ns_alarm::classify(6.f,30,nsBounds,15)==ns_alarm::Kind::None,"normal range");
-static_assert(ns_alarm::classify(2.9f,600,nsBounds,15)==ns_alarm::Kind::None,"stale measurements cannot sound");
-static_assert(ns_alarm::classify(15.f,INT32_MAX,nsBounds,15)==ns_alarm::Kind::None,"unknown timestamp cannot sound");
-static_assert(ns_alarm::classify(15.f,-1,nsBounds,15)==ns_alarm::Kind::None,"future timestamp cannot sound");
-static_assert(ns_alarm::classify(std::numeric_limits<float>::quiet_NaN(),0,nsBounds,15)==ns_alarm::Kind::None,"NaN cannot sound");
-static_assert(ns_alarm::classify(2.9f,0,nsBounds,0)==ns_alarm::Kind::None,"all alarms disabled");
-static_assert(ns_alarm::classify(2.9f,0,nsBounds,2)==ns_alarm::Kind::Low,"disabled critical falls back to enabled ordinary alarm");
-static_assert(ns_alarm::classify(15.f,0,nsBounds,4)==ns_alarm::Kind::High,"high red zone permits enabled ordinary fallback");
-static_assert(ns_alarm::classify(3.5f,0,nsBounds,2)==ns_alarm::Kind::None,"ordinary low cannot sound in yellow");
-static_assert(ns_alarm::classify(11.f,0,nsBounds,4)==ns_alarm::Kind::None,"ordinary high cannot sound in yellow");
+static_assert(ns_alarm::classify(2.9f,30,nsBounds)==ns_alarm::Kind::UrgentLow,"critical low");
+static_assert(ns_alarm::classify(3.5f,30,nsBounds)==ns_alarm::Kind::None,"low yellow zone must stay silent");
+static_assert(ns_alarm::classify(11.f,30,nsBounds)==ns_alarm::Kind::None,"high yellow zone must stay silent");
+static_assert(ns_alarm::classify(3.f,30,nsBounds)==ns_alarm::Kind::UrgentLow,"exact low red boundary must sound");
+static_assert(ns_alarm::classify(14.f,30,nsBounds)==ns_alarm::Kind::UrgentHigh,"exact high red boundary must sound");
+static_assert(ns_alarm::classify(3.001f,30,nsBounds)==ns_alarm::Kind::None,"just above low red boundary is silent");
+static_assert(ns_alarm::classify(13.999f,30,nsBounds)==ns_alarm::Kind::None,"just below high red boundary is silent");
+static_assert(ns_alarm::classify(4.f,30,nsBounds)==ns_alarm::Kind::None,"inner low boundary is silent");
+static_assert(ns_alarm::classify(10.f,30,nsBounds)==ns_alarm::Kind::None,"inner high boundary is silent");
+static_assert(ns_alarm::classify(15.f,30,nsBounds)==ns_alarm::Kind::UrgentHigh,"critical high");
+static_assert(ns_alarm::classify(6.f,30,nsBounds)==ns_alarm::Kind::None,"normal range");
+static_assert(ns_alarm::classify(2.9f,600,nsBounds)==ns_alarm::Kind::None,"stale measurements cannot sound");
+static_assert(ns_alarm::classify(15.f,INT32_MAX,nsBounds)==ns_alarm::Kind::None,"unknown timestamp cannot sound");
+static_assert(ns_alarm::classify(15.f,-1,nsBounds)==ns_alarm::Kind::None,"future timestamp cannot sound");
+static_assert(ns_alarm::classify(std::numeric_limits<float>::quiet_NaN(),0,nsBounds)==ns_alarm::Kind::None,"NaN cannot sound");
 static_assert(ns_alarm::mgdl_to_mmol(180.1559f)>9.999f && ns_alarm::mgdl_to_mmol(180.1559f)<10.001f,"status thresholds use Nightscout MMOL_TO_MGDL regardless of display units");
 
 constexpr bool server_clock_wrap() {
@@ -59,22 +54,6 @@ constexpr bool settings_require_live_server() {
     return !ns_alarm::server_settings_ready(state,"a");
 }
 static_assert(settings_require_live_server(),"cached NVS settings, a different host or invalid data cannot reveal server bounds");
-
-constexpr bool snooze_options_always_follow_server() {
-    ns_alarm::Preferences saved, server;
-    saved.origin[0]=server.origin[0]='a';
-    saved.overridden=true; saved.enabledMask=2;
-    saved.minutes[0][0]=99;
-    server.loaded=true; server.counts[0]=2;
-    server.minutes[0][0]=7; server.minutes[0][1]=19;
-    const auto next=ns_alarm::import_preferences(server,saved);
-    if (!next.loaded || !next.overridden || next.enabledMask!=2
-        || next.counts[0]!=2 || next.minutes[0][0]!=7 || next.minutes[0][1]!=19) return false;
-    saved.origin[0]='b';
-    const auto other=ns_alarm::import_preferences(server,saved);
-    return !other.overridden && other.enabledMask==server.enabledMask;
-}
-static_assert(snooze_options_always_follow_server(),"local alarm flags must not freeze server snooze intervals; another host clears overrides");
 
 static_assert(ns_http::timeout_ms(0)==15000 && ns_http::timeout_ms(15000)==15000,
     "alarm HTTP inherits the configured glucose client timeout");

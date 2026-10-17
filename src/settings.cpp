@@ -58,7 +58,8 @@ bool SettingsStore::load(AppSettings& out) {
     out.sgvBounds[i] = _prefs.getFloat(k, out.sgvBounds[i]);
   }
 
-  if (!out.isValidBounds()) {
+  const bool validBounds=out.isValidBounds();
+  if (!validBounds) {
     out.sgvBounds[0] = app_constants::default_glucose_bounds[0];
     out.sgvBounds[1] = app_constants::default_glucose_bounds[1];
     out.sgvBounds[2] = app_constants::default_glucose_bounds[2];
@@ -74,15 +75,13 @@ bool SettingsStore::load(AppSettings& out) {
     _prefs.getBytes("nsAlarms", &out.nsAlarms, sizeof(out.nsAlarms));
     if (!out.nsAlarms.valid()) out.nsAlarms = ns_alarm::Preferences{};
   }
+  out.boundsOverridden = validBounds && _prefs.getBool("boundsOverride", false)
+      && strcmp(out.nsAlarms.origin, out.hostSite) == 0;
   const uint8_t batterySource = _prefs.getUChar("batterySource",
       static_cast<uint8_t>(app_constants::default_battery_source));
   out.batterySource = valid_battery_source(batterySource)
       ? static_cast<BatterySource>(batterySource) : app_constants::default_battery_source;
   if (out.alarmVolume > 100) out.alarmVolume = 100;
-
-  // Совместимость со старыми настройками: любое включённое условие включает общую тревогу.
-  out.soundAlarmEnabled = _prefs.getBool("alarmEnable", app_constants::default_alarm_enabled)
-      || _prefs.getBool("missingAlarm", false);
 
   out.brightness = _prefs.getUChar("br", out.brightness);
   if (out.brightness < 1 || out.brightness > 100) {
@@ -122,11 +121,12 @@ bool SettingsStore::save(const AppSettings& s) {
   ok = writeStr(_prefs, "nsToken", s.nsToken, sizeof(s.nsToken)) && ok;
 
   ok = (_prefs.putBool("onbDone", s.onboardingDone) > 0) && ok;
-  ok = (_prefs.putBool("alarmEnable", s.soundAlarmEnabled) > 0) && ok;
   ok = (_prefs.putUChar("alarmVolume", s.alarmVolume) > 0) && ok;
+  ok = (_prefs.putBool("boundsOverride", s.boundsOverridden) > 0) && ok;
   ok = (_prefs.putBytes("nsAlarms", &s.nsAlarms, sizeof(s.nsAlarms)) == sizeof(s.nsAlarms)) && ok;
   ok = (_prefs.putUChar("batterySource", static_cast<uint8_t>(s.batterySource)) > 0) && ok;
   if (ok && _prefs.isKey("missingAlarm")) ok = _prefs.remove("missingAlarm");
+  if (ok && _prefs.isKey("alarmEnable")) ok = _prefs.remove("alarmEnable");
 
   ok = (_prefs.putUChar("br", s.brightness) > 0) && ok;
 
