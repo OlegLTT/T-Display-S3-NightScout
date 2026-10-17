@@ -1,12 +1,13 @@
 // Условия планового опроса Nightscout по зоне глюкозы и возрасту измерения.
 #pragma once
 
+#include "app_constants.h"
 #include <cstdint>
 #include "glucose_zone.h"
 
 namespace nightscout_poll {
-constexpr uint32_t interval_ms = 60000;
-constexpr int32_t stale_seconds = 305;
+constexpr uint32_t interval_ms = app_constants::poll_interval_ms;
+constexpr int32_t stale_seconds = app_constants::poll_stale_seconds;
 
 constexpr bool warning_zone(GlucoseZone zone) {
     return zone == GlucoseZone::LowRed || zone == GlucoseZone::LowYellow

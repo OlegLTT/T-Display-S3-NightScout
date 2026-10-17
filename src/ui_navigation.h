@@ -10,7 +10,7 @@ using Callback = void (*)(Action);
 void init(Callback callback);
 void update(bool logs_active, bool portal_active);
 void set_alarm_status(bool enabled, bool valid, bool sounding, bool audio_available,
-                      uint32_t remaining_seconds, uint8_t snooze_minutes, bool missing = false);
+                      uint32_t remaining_seconds, uint16_t snooze_minutes, bool missing = false, bool critical = false);
 
 void feed_touch(bool pressed, int16_t x, int16_t y);
 void poll();

@@ -1,4 +1,5 @@
 // Кольцевой буфер сообщений и вывод журнала в Serial и на экран.
+#include "app_constants.h"
 #include "logs.h"
 
 namespace logs {
@@ -39,7 +40,7 @@ static void add(LogLevel lvl, const char* s) {
   uint32_t ts;
   bool ts_is_real;
 
-  if (now > 100000) {
+  if (now > app_constants::valid_epoch_seconds) {
     ts = (uint32_t)now;
     ts_is_real = true;
   } else {
@@ -52,9 +53,11 @@ static void add(LogLevel lvl, const char* s) {
 
   char serial_line[LogBuffer::kMsgLen];
   snprintf(serial_line, sizeof(serial_line), "%s %c %s", tbuf, lvl_char(lvl), msg);
+  trimUtf8Tail(serial_line);
 
   char buf_line[LogBuffer::kMsgLen];
   snprintf(buf_line, sizeof(buf_line), "%s %s", tbuf, msg);
+  trimUtf8Tail(buf_line);
 
   if (g_serial) {
     Serial.println(serial_line);

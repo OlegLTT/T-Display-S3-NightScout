@@ -1,8 +1,8 @@
 // Первичное подключение к доступной сети и переподключение к выбранному SSID.
 #pragma once
+#include "app_constants.h"
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiMulti.h>
 #include "logs.h"
 
 struct WifiCred {
@@ -11,15 +11,15 @@ struct WifiCred {
 };
 
 struct WifiManagerConfig {
-  const char* hostname           = "NS-Monitior";
-  uint32_t connectTimeoutMs      = 20000;
-  uint32_t retryDelayMs          = 500;
-  bool enableAutoReconnect       = true;
+  const char* hostname           = app_constants::wifi_default_hostname;
+  uint32_t connectTimeoutMs      = app_constants::wifi_connect_timeout_ms;
+  uint32_t retryDelayMs          = app_constants::wifi_retry_delay_ms;
+  bool enableAutoReconnect       = app_constants::wifi_auto_reconnect;
 
-  uint8_t  beginAttempts         = 3;
+  uint8_t  beginAttempts         = app_constants::wifi_begin_attempts;
 
-  uint32_t reconnectPeriodMs     = 3000;
-  uint32_t reconnectTryWindowMs  = 8000;
+  uint32_t reconnectPeriodMs     = app_constants::wifi_reconnect_period_ms;
+  uint32_t reconnectTryWindowMs  = app_constants::wifi_reconnect_window_ms;
 };
 
 class WifiManager {
@@ -42,14 +42,15 @@ public:
 
 private:
   WifiManagerConfig _cfg{};
-  WiFiMulti _multi;
+  size_t _networkIndex = 0;
+  bool _reportedConnected = false;
   LogBuffer* _logs = nullptr;
 
   struct CredItem {
     String ssid;
     String pass;
   };
-  CredItem _creds[10];
+  CredItem _creds[app_constants::wifi_credential_capacity];
   size_t _credCount = 0;
 
   String _lockedSsid;

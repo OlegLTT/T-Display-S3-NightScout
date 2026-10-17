@@ -1,4 +1,5 @@
 // Экран часов: время, дата, глюкоза и тренд; цвет учитывает возраст данных.
+#include "app_constants.h"
 #include "ui_clock.h"
 #include "ui_layout.h"
 #include "fonts.h"
@@ -11,6 +12,7 @@
 
 #include "ui_ns_cache.h"
 #include "ui_ns_view.h"
+#include "trend_arrows.h"
 
 static const char* const MONTHS_RU[12] = {
   "января","февраля","марта","апреля","мая","июня",
@@ -40,22 +42,10 @@ static lv_obj_t* lbl_age   = nullptr;
 static lv_obj_t* top_mid   = nullptr;
 static lv_obj_t* arrow_box = nullptr;
 
-static lv_obj_t* arrows[3] = {nullptr, nullptr, nullptr};
-static int32_t   arrow_angle10_raw = 0;
+static TrendArrows trend_arrows;
 
-static int32_t g_arrow_cx = 0;
-static int32_t g_arrow_cy = 0;
-
-static constexpr int32_t AR_PX = 9;
-static constexpr int32_t AR_PY = 8;
-static constexpr float   AR_GAP = 10.0f;
-
-static constexpr int32_t AR_BOX_W = 56;
-static constexpr int32_t AR_BOX_H = 26;
-
-static const lv_point_precise_t arrow_points[] = {
-  {0, 8}, {18, 8}, {9, 0}, {18, 8}, {9, 16}
-};
+static constexpr int32_t AR_BOX_W = trend_arrow::clock_geometry.width;
+static constexpr int32_t AR_BOX_H = trend_arrow::clock_geometry.height;
 
 static NsUiCache g_cache;
 
@@ -88,89 +78,11 @@ static lv_color_t color_by_age(lv_color_t base, bool haveAge, int ageMin, bool s
   if (stale || !haveAge || ageMin < 0)
     return mix_rgb(base, grey, 200);
 
-  if (ageMin <= 5)  return base;
-  if (ageMin <= 15) return mix_rgb(base, grey, 120);
+  if (ageMin <= app_constants::fresh_age_minutes)  return base;
+  if (ageMin <= app_constants::data_expiry_seconds / 60) return mix_rgb(base, grey, 120);
   return mix_rgb(base, grey, 200);
 }
 
-static int32_t norm3600(int32_t a) {
-  a %= 3600;
-  if (a < 0) a += 3600;
-  return a;
-}
-
-static void arrow_anim_cb(void *var, int32_t angle10) {
-  lv_obj_set_style_transform_angle((lv_obj_t*)var, angle10, LV_PART_MAIN);
-  arrow_angle10_raw = angle10;
-}
-
-// Привязываем стрелки к фактическому положению надписи изменения глюкозы.
-static void arrows_update_base_from_delta() {
-
-  if (!arrow_box) return;
-  g_arrow_cx = AR_BOX_W / 2;
-  g_arrow_cy = AR_BOX_H / 2;
-}
-
-static void arrows_apply_layout(int32_t angle_deg, int count) {
-  if (count < 0) count = 0;
-  if (count > 3) count = 3;
-
-  const float rad = angle_deg * 3.1415926f / 180.0f;
-  const float nx = -sinf(rad);
-  const float ny =  cosf(rad);
-
-  float offsets[3] = {0,0,0};
-  if (count == 2) { offsets[0] = -0.5f; offsets[1] = +0.5f; }
-  if (count == 3) { offsets[0] = -1.0f; offsets[1] =  0.0f; offsets[2] = +1.0f; }
-
-  for (int i = 0; i < 3; i++) {
-    if (!arrows[i]) continue;
-
-    if (i < count) {
-      lv_obj_clear_flag(arrows[i], LV_OBJ_FLAG_HIDDEN);
-
-      float k = offsets[i] * AR_GAP;
-      int32_t cx = (int32_t)lroundf((float)g_arrow_cx + nx * k);
-      int32_t cy = (int32_t)lroundf((float)g_arrow_cy + ny * k);
-
-      lv_obj_set_pos(arrows[i], cx - AR_PX, cy - AR_PY);
-    } else {
-      lv_obj_add_flag(arrows[i], LV_OBJ_FLAG_HIDDEN);
-    }
-  }
-}
-
-static void arrow_set_angle_deg_via_right(int32_t target_deg, uint32_t time_ms) {
-  if (!arrows[0]) return;
-
-  int32_t start_raw  = arrow_angle10_raw;
-  int32_t start_norm = norm3600(start_raw);
-  int32_t target10   = norm3600(target_deg * 10);
-
-  int32_t diff;
-  if (target10 >= start_norm) diff = (target10 - start_norm) - 3600;
-  else                        diff = (target10 - start_norm) + 3600;
-
-  if (diff == 0) return;
-
-  int32_t end_raw = start_raw + diff;
-
-  for (int i = 0; i < 3; i++) {
-    if (!arrows[i]) continue;
-
-    lv_anim_del(arrows[i], arrow_anim_cb);
-
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, arrows[i]);
-    lv_anim_set_exec_cb(&a, arrow_anim_cb);
-    lv_anim_set_time(&a, time_ms);
-    lv_anim_set_values(&a, start_raw, end_raw);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
-    lv_anim_start(&a);
-  }
-}
 
 lv_obj_t* ui_clock_screen() {
   return g_scr_clock;
@@ -225,25 +137,8 @@ lv_obj_t* ui_clock_create() {
   lv_obj_set_style_border_width(arrow_box, 0, LV_PART_MAIN);
   lv_obj_set_style_pad_all(arrow_box, 0, LV_PART_MAIN);
 
-  for (int i = 0; i < 3; i++) {
-    arrows[i] = lv_line_create(arrow_box);
-    lv_line_set_points(arrows[i], arrow_points,
-                       sizeof(arrow_points) / sizeof(arrow_points[0]));
-    lv_obj_set_style_line_width(arrows[i], 3, LV_PART_MAIN);
-    lv_obj_set_style_line_rounded(arrows[i], true, LV_PART_MAIN);
-    lv_obj_set_style_line_color(arrows[i], lv_color_make(200, 200, 200), LV_PART_MAIN);
-
-    lv_obj_set_style_transform_pivot_x(arrows[i], AR_PX, LV_PART_MAIN);
-    lv_obj_set_style_transform_pivot_y(arrows[i], AR_PY, LV_PART_MAIN);
-  }
-
-  arrows_update_base_from_delta();
-  arrow_angle10_raw = 0;
-  for (int i = 0; i < 3; i++) {
-    if (!arrows[i]) continue;
-    lv_obj_set_style_transform_angle(arrows[i], arrow_angle10_raw, LV_PART_MAIN);
-  }
-  arrows_apply_layout(0, 0);
+  trend_arrows.create(arrow_box, trend_arrow::clock_geometry, AR_BOX_W / 2, AR_BOX_H / 2,
+                      lv_color_make(200, 200, 200));
 
   lbl_time = lv_label_create(g_scr_clock);
   lv_obj_set_style_text_font(lbl_time, &directive_four_condensed_bold_100, LV_PART_MAIN);
@@ -308,29 +203,6 @@ void clock_update_full(const NightscoutData& ns) {
     lv_obj_set_style_text_color(lbl_age, zoneColUsed, LV_PART_MAIN);
   }
 
-  arrows_update_base_from_delta();
-
-  for (int i = 0; i < 3; i++) {
-    if (!arrows[i]) continue;
-    lv_obj_set_style_line_color(arrows[i], zoneColUsed, LV_PART_MAIN);
-  }
-
-  if (v.arrowCount <= 0) {
-    arrows_apply_layout(0, 0);
-  } else {
-    const bool trendChanged = ui_str_changed(g_cache.trend, v.trend);
-
-    if (trendChanged || g_cache.angleDeg != v.angleDeg || g_cache.arrowCount != v.arrowCount) {
-      std::strncpy(g_cache.trend, v.trend, sizeof(g_cache.trend));
-      g_cache.trend[sizeof(g_cache.trend) - 1] = '\0';
-
-      g_cache.angleDeg = v.angleDeg;
-      g_cache.arrowCount = v.arrowCount;
-
-      arrows_apply_layout(v.angleDeg, v.arrowCount);
-      arrow_set_angle_deg_via_right(v.angleDeg, 250);
-    } else {
-      arrows_apply_layout(v.angleDeg, v.arrowCount);
-    }
-  }
+  trend_arrows.set_color(zoneColUsed);
+  trend_arrows.set(v.angleDeg, v.arrowCount, 250);
 }

@@ -1,4 +1,5 @@
 // Просмотр журнала с переносом строк, прокруткой и сохранением позиции при обновлении.
+#include "app_constants.h"
 #include "ui_logs.h"
 #include "ui_layout.h"
 
@@ -6,8 +7,8 @@
 #include <cstdio>
 #include <cstdint>
 
-static constexpr int        MAX_ROWS    = 60;
-static constexpr uint32_t   REFRESH_MS  = 120;
+static constexpr int        MAX_ROWS    = app_constants::log_visible_rows;
+static constexpr uint32_t   REFRESH_MS  = app_constants::log_refresh_ms;
 static constexpr lv_coord_t SB_W        = 4;
 
 static lv_obj_t* g_scr_log  = nullptr;

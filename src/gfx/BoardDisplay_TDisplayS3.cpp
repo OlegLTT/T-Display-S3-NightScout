@@ -1,10 +1,12 @@
 // Дисплей ST7789 по шине i80 и пассивный buzzer T-Display S3 на GPIO13.
+#include "../app_constants.h"
 #include "board_config.h"
 
 #if defined(BOARD_TDISPLAY_S3)
 #include "BoardDisplay_TDisplayS3.h"
+#include "../backlight.h"
+#include "../buzzer.h"
 #include <Arduino.h>
-#include <esp_timer.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 
@@ -30,70 +32,22 @@ static constexpr uint16_t LCD_H = 170;
 
 namespace gfx {
 
-namespace {
-
-// Канал 2 использует другой таймер LEDC, чем подсветка на канале 7.
-constexpr int buzzerChannel = 2;
-esp_timer_handle_t buzzerStopTimer = nullptr;
-
-// Одноразовый esp_timer завершает писк независимо от скорости основного цикла.
-void stopBuzzer(void*) { ledcWriteTone(buzzerChannel, 0); }
-}
-
 void BoardDisplay_TDisplayS3::set_alarm_volume(uint8_t percent) {
     m_alarm_volume = percent > 100 ? 100 : percent;
+    buzzer::setVolume(m_alarm_volume);
 }
 
-// PWM запускается без ожидания; два писка по 180 мс разделены паузой, затем следует длинная пауза.
 void BoardDisplay_TDisplayS3::set_alarm_sound(bool active) {
-    static bool initialized = false;
-    static bool wasActive = false;
-    static bool secondBeep = false;
-    static uint32_t lastBeep = 0;
-    if (!initialized) {
-        initialized = true;
-        esp_timer_create_args_t args = {};
-        args.callback = stopBuzzer;
-        args.name = "buzzer_stop";
-        m_sound_available = ledcSetup(buzzerChannel, 1800, 8) > 0
-            && esp_timer_create(&args, &buzzerStopTimer) == ESP_OK;
-        if (!m_sound_available) return;
-        ledcAttachPin(PIN_BUZZER, buzzerChannel);
-        ledcWriteTone(buzzerChannel, 0);
-    }
-    if (!m_sound_available) return;
-    const uint32_t now = millis();
-    active = active && m_alarm_volume > 0;
-    if (!active) {
-        if (wasActive) {
-            esp_timer_stop(buzzerStopTimer);
-            stopBuzzer(nullptr);
-        }
-        wasActive = false;
-        return;
-    }
-    if (!wasActive) {
-        secondBeep = false;
-        lastBeep = now - 4000;
-        wasActive = true;
-    }
-    if (uint32_t(now - lastBeep) < (secondBeep ? 360U : 4000U)) return;
-    esp_timer_stop(buzzerStopTimer);
-    ledcWriteTone(buzzerChannel, 1800);
-
-    // ledcWriteTone задаёт 10-битное разрешение; заполнение до 50% регулирует громкость пассивного buzzer.
-    ledcWrite(buzzerChannel, (uint32_t(m_alarm_volume) * 511 + 99) / 100);
-    if (esp_timer_start_once(buzzerStopTimer, 180000) != ESP_OK) {
-        stopBuzzer(nullptr);
-        m_sound_available = false;
-    }
-    lastBeep = now;
-    secondBeep = !secondBeep;
+    buzzer::setAlarm(active && m_alarm_volume > 0);
 }
 
-BoardDisplay_TDisplayS3  BoardDisplay_TDisplayS3 ::s_instance;
+bool BoardDisplay_TDisplayS3::alarm_sound_available() const { return buzzer::available(); }
 
-BoardDisplay_TDisplayS3& BoardDisplay_TDisplayS3::instance() { return s_instance;}
+// Драйвер создаётся из setup(), после инициализации GPIO-зуммера.
+BoardDisplay_TDisplayS3& BoardDisplay_TDisplayS3::instance() {
+    static BoardDisplay_TDisplayS3 display;
+    return display;
+}
 
 BoardDisplay_TDisplayS3 ::BoardDisplay_TDisplayS3 () {
 
@@ -154,8 +108,9 @@ BoardDisplay_TDisplayS3 ::BoardDisplay_TDisplayS3 () {
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(m_panel_handle, false, true));
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(m_panel_handle, 0, 35));
 
+    // До Backlight::begin() подсветка включена обычным GPIO, без analogWrite().
+    digitalWrite(PIN_BACKLIGHT, HIGH);
     pinMode(PIN_BACKLIGHT, OUTPUT);
-    set_backlight(brightness_level::max);
 }
 
 BoardDisplay_TDisplayS3 ::~BoardDisplay_TDisplayS3 () {}
@@ -164,7 +119,7 @@ uint16_t BoardDisplay_TDisplayS3 ::width() const  { return LCD_W; }
 uint16_t BoardDisplay_TDisplayS3 ::height() const { return LCD_H; }
 
 void BoardDisplay_TDisplayS3 ::set_backlight(brightness_level level) {
-    analogWrite(PIN_BACKLIGHT, static_cast<int>(level));
+    Backlight::setPercentStatic((uint16_t(level) * 100 + 254) / 255);
 }
 
 void BoardDisplay_TDisplayS3 ::set_transfer_done_callback(transfer_done_callback_t cb, void* user_data) {

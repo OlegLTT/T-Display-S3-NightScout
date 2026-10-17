@@ -1,13 +1,14 @@
 // Выбранная яркость хранится отдельно от временного максимума во время тревоги.
 #pragma once
+#include "app_constants.h"
 #include <Arduino.h>
 #include "board_config.h"
 
 struct BacklightConfig {
   int pin = PIN_BACKLIGHT;
-  int channel = 7;
-  int freq = 12000;
-  int resBits = 10;
+  int channel = app_constants::backlight_channel;
+  int freq = app_constants::backlight_pwm_hz;
+  int resBits = app_constants::backlight_resolution_bits;
 };
 
 class Backlight {
@@ -31,8 +32,9 @@ public:
 
 private:
   void applyPercent(uint8_t percent);
-  uint8_t _requestedPercent = 100;
+  uint8_t _requestedPercent = app_constants::default_brightness_percent;
   bool _alarmBoost = false;
+  bool _pwmAttached = false;
   void backlightInit();
   void backlightForceMax();
 

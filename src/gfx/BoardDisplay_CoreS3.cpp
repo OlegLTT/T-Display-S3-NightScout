@@ -1,4 +1,5 @@
 // Дисплей, динамик, сенсор и кнопка питания CoreS3 через M5Unified.
+#include "../app_constants.h"
 #include "board_config.h"
 
 #if BOARD_M5CORE_S3
@@ -10,7 +11,7 @@
 namespace gfx {
 
 namespace {
-constexpr uint32_t DOUBLE_CLICK_MS = 400;
+constexpr uint32_t DOUBLE_CLICK_MS = app_constants::cores3_double_click_ms;
 }
 
 // Первый вызов из setup создаёт драйвер после инициализации Arduino.
@@ -27,7 +28,7 @@ BoardDisplay_CoreS3::BoardDisplay_CoreS3() {
     cfg.internal_imu = false;
     cfg.internal_rtc = false;
     M5.begin(cfg);
-    M5.Speaker.setVolume(80);
+    M5.Speaker.setVolume(app_constants::cores3_initial_volume);
     m_sound_available = M5.Speaker.begin() && M5.Speaker.isRunning();
 
     M5.Display.setRotation(1);
@@ -69,17 +70,17 @@ void BoardDisplay_CoreS3::set_alarm_sound(bool active) {
         return;
     }
     m_second_beep = false;
-    m_last_beep = millis() - 4000;
+    m_last_beep = millis() - app_constants::alarm_repeat_ms;
     update_alarm_sound(millis());
 }
 
 // Два сигнала по 180 мс; конечная длительность ограничивает звук даже при задержках основного цикла.
 void BoardDisplay_CoreS3::update_alarm_sound(uint32_t now) {
     if (!m_alarm_active) return;
-    const uint32_t interval = m_second_beep ? 360 : 4000;
+    const uint32_t interval = m_second_beep ? app_constants::alarm_second_beep_ms : app_constants::alarm_repeat_ms;
     if (now - m_last_beep < interval) return;
 
-    if (!M5.Speaker.tone(1800, 180, 0, true)) {
+    if (!M5.Speaker.tone(app_constants::alarm_frequency_hz, app_constants::alarm_beep_ms, 0, true)) {
         M5.Speaker.stop(0);
         m_alarm_active = false;
         m_sound_available = false;

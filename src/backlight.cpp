@@ -1,5 +1,8 @@
 // Выбранная яркость хранится отдельно от временного максимума во время тревоги.
+#include "app_constants.h"
 #include "backlight.h"
+#include <esp_arduino_version.h>
+#include <driver/gpio.h>
 
 #if defined(BOARD_M5CORE_S3)
   #include "gfx/Display.h"
@@ -45,9 +48,8 @@ void Backlight::begin(const BacklightConfig& cfg) {
   _cfg = cfg;
   _maxDuty = (1u << _cfg.resBits) - 1;
 
-  static const uint8_t defaultLevels[] = {100, 70, 30, 10, 1};
   if (!_levels || _count == 0) {
-    setLevels(defaultLevels, sizeof(defaultLevels) / sizeof(defaultLevels[0]));
+    setLevels(app_constants::brightness_levels, sizeof(app_constants::brightness_levels) / sizeof(app_constants::brightness_levels[0]));
   }
 
 #if !defined(BOARD_M5CORE_S3)
@@ -60,8 +62,12 @@ void Backlight::begin(const BacklightConfig& cfg) {
 
 void Backlight::backlightInit() {
 #if !defined(BOARD_M5CORE_S3)
-  ledcSetup(_cfg.channel, _cfg.freq, _cfg.resBits);
-  ledcAttachPin(_cfg.pin, _cfg.channel);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  _pwmAttached = ledcAttachChannel(_cfg.pin, _cfg.freq, _cfg.resBits, _cfg.channel);
+#else
+  _pwmAttached = ledcSetup(_cfg.channel, _cfg.freq, _cfg.resBits) > 0;
+  if (_pwmAttached) ledcAttachPin(_cfg.pin, _cfg.channel);
+#endif
 #endif
 }
 
@@ -70,17 +76,20 @@ void Backlight::backlightForceMax() {
 #if defined(BOARD_M5CORE_S3)
   gfx::Display::instance().set_backlight(gfx::Display::brightness_level::max);
 #else
-  ledcWrite(_cfg.channel, 0);
-  delay(1);
-
-  ledcDetachPin(_cfg.pin);
-  delay(2);
-
+  // Готовим HIGH до detach; GPIO не проваливается в плавающее состояние.
+  gpio_set_level(static_cast<gpio_num_t>(_cfg.pin), HIGH);
+  if (_pwmAttached) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcDetach(_cfg.pin);
+#else
+    ledcDetachPin(_cfg.pin);
+#endif
+    _pwmAttached = false;
+  }
   pinMode(_cfg.pin, OUTPUT);
   digitalWrite(_cfg.pin, HIGH);
-  delay(2);
 
-  Serial.printf("FORCE MAX: gpio=%d\n", digitalRead(_cfg.pin));
+  Serial.printf("Backlight 100%%: GPIO=%d\n", digitalRead(_cfg.pin));
 #endif
 }
 
@@ -113,11 +122,19 @@ void Backlight::applyPercent(uint8_t percent) {
   }
   if (percent < 1) percent = 1;
 
-  ledcAttachPin(_cfg.pin, _cfg.channel);
+  if (!_pwmAttached) backlightInit();
+  if (!_pwmAttached) {
+    backlightForceMax(); // Ошибка PWM не оставляет экран без подсветки.
+    return;
+  }
   uint32_t duty = (uint32_t)percent * _maxDuty / 100;
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(_cfg.pin, duty);
+#else
   ledcWrite(_cfg.channel, duty);
+#endif
 
-  Serial.printf("BL %u%% duty=%u/%u\n", percent, duty, _maxDuty);
+  Serial.printf("Backlight %u%%: duty=%u/%u\n", percent, duty, _maxDuty);
 #endif
 }
 

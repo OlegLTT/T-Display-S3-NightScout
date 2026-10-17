@@ -1,12 +1,13 @@
 // Временная надпись с выбранной яркостью поверх текущего экрана.
 #pragma once
+#include "app_constants.h"
 #include <lvgl.h>
 #include <stdint.h>
 
 class BrightnessOverlay {
 public:
   void init(lv_obj_t* parent = nullptr);
-  void show(uint8_t percent, uint32_t durationMs = 2000);
+  void show(uint8_t percent, uint32_t durationMs = app_constants::brightness_overlay_ms);
   void hide();
 
 private:

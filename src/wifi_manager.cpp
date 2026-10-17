@@ -1,16 +1,17 @@
 // Первичное подключение к доступной сети и переподключение к выбранному SSID.
+#include "app_constants.h"
 #include "wifi_manager.h"
 
 static const char* wlStatusStr(wl_status_t st) {
   switch (st) {
-    case WL_IDLE_STATUS:      return "IDLE";
-    case WL_NO_SSID_AVAIL:    return "NO_SSID_AVAIL";
-    case WL_SCAN_COMPLETED:   return "SCAN_COMPLETED";
-    case WL_CONNECTED:        return "CONNECTED";
-    case WL_CONNECT_FAILED:   return "CONNECT_FAILED";
-    case WL_CONNECTION_LOST:  return "CONNECTION_LOST";
-    case WL_DISCONNECTED:     return "DISCONNECTED";
-    default:                  return "UNKNOWN";
+    case WL_IDLE_STATUS:      return "idle";
+    case WL_NO_SSID_AVAIL:    return "network not found";
+    case WL_SCAN_COMPLETED:   return "scan complete";
+    case WL_CONNECTED:        return "connected";
+    case WL_CONNECT_FAILED:   return "connection failed";
+    case WL_CONNECTION_LOST:  return "connection lost";
+    case WL_DISCONNECTED:     return "disconnected";
+    default:                  return "unknown";
   }
 }
 
@@ -22,8 +23,7 @@ void WifiManager::addNetworks(const WifiCred* list, size_t count) {
     const char* pass = list[i].pass;
     const bool open = (!pass || pass[0] == '\0');
 
-    logs::logIf("[WiFi] addAP: '%s' (%s)", list[i].ssid, open ? "open" : "password set");
-    _multi.addAP(list[i].ssid, open ? nullptr : pass);
+    logs::logIf("[Wi-Fi] Network '%s' (%s)", list[i].ssid, open ? "open" : "password set");
 
     if (_credCount < (sizeof(_creds) / sizeof(_creds[0]))) {
       _creds[_credCount].ssid = String(list[i].ssid);
@@ -55,7 +55,7 @@ void WifiManager::lockCurrentSsid() {
   _lockedSsid = ssid;
   _lockedPass = pass;
 
-  logs::logIf("[WiFi] last connected SSID='%s'", _lockedSsid.c_str());
+  logs::logIf("[Wi-Fi] Selected network '%s'", _lockedSsid.c_str());
 }
 
 void WifiManager::logStatus(const char* prefix) {
@@ -65,72 +65,45 @@ void WifiManager::logStatus(const char* prefix) {
 }
 
 bool WifiManager::begin() {
-  logs::logI("[WiFi] ---- begin ----");
-  logs::logIf("[WiFi] hostname: %s", _cfg.hostname ? _cfg.hostname : "(null)");
-  logs::logIf("[WiFi] timeout : %lu ms", (unsigned long)_cfg.connectTimeoutMs);
-
-  WiFi.mode(WIFI_STA);
+  if (!_credCount) return false;
+  const bool ap = WiFi.getMode() & WIFI_MODE_AP;
+  WiFi.mode(ap ? WIFI_AP_STA : WIFI_STA);
   if (_cfg.hostname && _cfg.hostname[0]) WiFi.setHostname(_cfg.hostname);
-
-  _lastReconnectAttemptMs = 0;
-  _windowStartMs = 0;
-
-  for (uint8_t attempt = 1; attempt <= _cfg.beginAttempts; attempt++) {
-    uint32_t t0 = millis();
-    logs::logIf("[WiFi] attempt %u/%u", (unsigned)attempt, (unsigned)_cfg.beginAttempts);
-
-    while (millis() - t0 < _cfg.connectTimeoutMs) {
-      if (_multi.run() == WL_CONNECTED) {
-        logs::logIf("[WiFi] CONNECTED: SSID='%s'", WiFi.SSID().c_str());
-        logs::logIf("[WiFi] IP       : %s", WiFi.localIP().toString().c_str());
-        int rssi = WiFi.RSSI();
-        logs::logIf("[WiFi] RSSI     : %d dBm", rssi);
-
-        if (rssi < -75) logs::logWf("[WiFi] Weak signal: %d dBm", rssi);
-
-        lockCurrentSsid();
-
-        logs::logI("[WiFi] ---- ok ----");
-        return true;
-      }
-      delay(_cfg.retryDelayMs);
-    }
-
-    logs::logW("[WiFi] connect timeout (attempt failed)");
+  _lockedSsid = ""; _lockedPass = ""; _networkIndex = 0;
+  _reportedConnected = false;
+  _lastReconnectAttemptMs = millis();
+  String password;
+  if (WiFi.status() == WL_CONNECTED && findPassForSsid(WiFi.SSID(), password)) {
+    lockCurrentSsid();
+    return true;
   }
-
-  logs::logEf("[WiFi] CONNECT FAILED after %u attempts", (unsigned)_cfg.beginAttempts);
-  return false;
+  WiFi.disconnect(false);
+  const auto& network = _creds[_networkIndex];
+  WiFi.begin(network.ssid.c_str(), network.pass.isEmpty() ? nullptr : network.pass.c_str());
+  logs::logIf("[Wi-Fi] Connecting to '%s'", network.ssid.c_str());
+  return true;
 }
 
 void WifiManager::tick() {
-  if (!_cfg.enableAutoReconnect) return;
-
   if (WiFi.status() == WL_CONNECTED) {
-
-    lockCurrentSsid();
+    if (!_reportedConnected) {
+      _reportedConnected = true;
+      lockCurrentSsid();
+      logs::logIf("[Wi-Fi] Connected: %s, RSSI=%d", WiFi.SSID().c_str(), WiFi.RSSI());
+    }
     return;
   }
-
-  if (_lockedSsid.isEmpty()) return;
-
+  if (!_cfg.enableAutoReconnect || !_credCount) return;
+  if (_reportedConnected) { logs::logW("[Wi-Fi] Connection lost"); _reportedConnected=false; }
   const uint32_t now = millis();
-
-  if (_windowStartMs == 0 || (now - _windowStartMs) > _cfg.reconnectTryWindowMs) {
-    _windowStartMs = now;
-    _lastReconnectAttemptMs = 0;
-  }
-
-  if (_lastReconnectAttemptMs != 0 && (now - _lastReconnectAttemptMs) < _cfg.reconnectPeriodMs) {
-    return;
-  }
+  if (uint32_t(now - _lastReconnectAttemptMs) < _cfg.connectTimeoutMs) return;
   _lastReconnectAttemptMs = now;
-
-  logs::logWf("[WiFi] reconnect -> SSID='%s'", _lockedSsid.c_str());
-
-  WiFi.disconnect(false);
-  delay(10);
-
-  if (_lockedPass.isEmpty()) WiFi.begin(_lockedSsid.c_str());
-  else WiFi.begin(_lockedSsid.c_str(), _lockedPass.c_str());
+  if (!_lockedSsid.isEmpty()) {
+    WiFi.begin(_lockedSsid.c_str(), _lockedPass.isEmpty() ? nullptr : _lockedPass.c_str());
+  } else {
+    _networkIndex = (_networkIndex + 1) % _credCount;
+    const auto& network = _creds[_networkIndex];
+    WiFi.begin(network.ssid.c_str(), network.pass.isEmpty() ? nullptr : network.pass.c_str());
+  }
+  logs::logW("[Wi-Fi] Reconnecting");
 }

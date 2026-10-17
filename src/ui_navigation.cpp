@@ -1,4 +1,5 @@
 // Навигация и индикация тревоги: сенсорная кнопка CoreS3 и компактный индикатор T-Display.
+#include "app_constants.h"
 #include "ui_navigation.h"
 #include "ui_layout.h"
 #include "fonts.h"
@@ -8,7 +9,7 @@
 #if defined(BOARD_M5CORE_S3)
 namespace ui_navigation {
 namespace {
-constexpr int32_t swipe_threshold = 35;
+constexpr int32_t swipe_threshold = app_constants::swipe_threshold_px;
 constexpr uint32_t alarm_background = 0x101010;
 
 Callback on_action = nullptr;
@@ -66,7 +67,7 @@ void init(Callback callback) {
 }
 
 void set_alarm_status(bool enabled, bool valid, bool sounding, bool audio_available,
-                      uint32_t remaining_seconds, uint8_t snooze_minutes, bool missing) {
+                      uint32_t remaining_seconds, uint16_t snooze_minutes, bool missing, bool) {
     if (!alarm_button) return;
     if (enabled) lv_obj_remove_flag(alarm_button, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(alarm_button, LV_OBJ_FLAG_HIDDEN);
@@ -78,7 +79,7 @@ void set_alarm_status(bool enabled, bool valid, bool sounding, bool audio_availa
         std::snprintf(text, sizeof(text), "Ошибка звука");
         color = 0xFF0000;
     } else if (remaining_seconds) {
-        color = 0x6ABEFF;
+        color = 0xFF0000;
         std::snprintf(text, sizeof(text), "Отсрочка %u мин | %lu:%02lu",
             unsigned(snooze_minutes), (unsigned long)(remaining_seconds / 60),
             (unsigned long)(remaining_seconds % 60));
@@ -192,7 +193,7 @@ void init(Callback) {
     lv_obj_set_style_line_color(alarm_slash, lv_color_hex(0xFF0000), 0);
     lv_obj_remove_flag(alarm_slash, LV_OBJ_FLAG_CLICKABLE);
     alarm_timer = lv_label_create(lv_layer_top());
-    lv_obj_set_style_text_font(alarm_timer, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(alarm_timer, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(alarm_timer, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(alarm_timer, 46);
     lv_obj_remove_flag(alarm_timer, LV_OBJ_FLAG_CLICKABLE);
@@ -208,7 +209,7 @@ void update(bool logs_active, bool portal_active) {
     }
 }
 void set_alarm_status(bool enabled, bool valid, bool sounding, bool available,
-                      uint32_t remaining, uint8_t, bool missing) {
+                      uint32_t remaining, uint16_t, bool, bool critical) {
     alarm_enabled = enabled;
     if (!alarm_label) return;
     update(screen_hides_alarm, false);
@@ -223,18 +224,19 @@ void set_alarm_status(bool enabled, bool valid, bool sounding, bool available,
         color = 0xFF0000;
     } else {
         std::snprintf(text, sizeof(text), LV_SYMBOL_VOLUME_MAX);
-        color = 0x00FF00;
+        color = sounding ? (critical ? 0xFF0000 : 0xFFD166) : valid ? 0x00FF00 : 0x999999;
     }
 
-    // Перечёркнутый красный значок и минуты отображаются только при активной отсрочке.
+    // Перечёркнутый значок появляется сразу при локальной или принятой по LAN паузе.
     if (enabled && available && remaining) lv_obj_remove_flag(alarm_slash, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(alarm_slash, LV_OBJ_FLAG_HIDDEN);
     if (std::strcmp(lv_label_get_text(alarm_label), text) != 0) lv_label_set_text(alarm_label, text);
     lv_obj_set_style_text_color(alarm_label, lv_color_hex(color), 0);
     char countdown[16] = {};
     if (enabled && available && remaining) {
-        std::snprintf(countdown, sizeof(countdown), "%lu",
-            (unsigned long)((remaining + 59) / 60));
+        if (remaining < 6000) std::snprintf(countdown, sizeof(countdown), "%lu:%02lu",
+            (unsigned long)(remaining/60), (unsigned long)(remaining%60));
+        else std::snprintf(countdown,sizeof(countdown),"%lum",(unsigned long)((remaining+59)/60));
     }
     if (std::strcmp(lv_label_get_text(alarm_timer), countdown) != 0)
         lv_label_set_text(alarm_timer, countdown);

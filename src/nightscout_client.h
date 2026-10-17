@@ -1,5 +1,6 @@
 // Получение данных Nightscout по HTTP/HTTPS с повторными попытками и разбором JSON.
 #pragma once
+#include "app_constants.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -10,26 +11,27 @@
 #include <StringUtils.h>
 
 struct NSConfig {
+  BatterySource batterySource = app_constants::default_battery_source;
   String   baseUrl;
   String   token;
 
-  bool     preferHttpsIfNoScheme = true;
+  bool     preferHttpsIfNoScheme = app_constants::prefer_https;
 
-  uint32_t httpTimeoutMs = 15000;
-  uint32_t hostErrorBackoffMs = 60000;
-  bool     tlsInsecure = true;
+  uint32_t httpTimeoutMs = app_constants::http_timeout_ms;
+  uint32_t hostErrorBackoffMs = app_constants::host_error_backoff_ms;
+  bool     tlsInsecure = app_constants::tls_insecure;
 
-  float    sgvBounds[4] = {3.9f, 4.5f, 8.5f, 10.0f};
+  float    sgvBounds[4] = {app_constants::default_glucose_bounds[0], app_constants::default_glucose_bounds[1], app_constants::default_glucose_bounds[2], app_constants::default_glucose_bounds[3]};
 
-  uint32_t retryDelayMs = 1500;
+  uint32_t retryDelayMs = app_constants::ns_retry_delay_ms;
 
   // Нулевое значение означает неограниченное число повторных попыток.
-  uint8_t  retryMax = 0;
+  uint8_t  retryMax = app_constants::ns_retry_max;
 
-  int      warnRssiDbm = -78;
-  uint32_t weakRssiLogPeriodMs = 8000;
+  int      warnRssiDbm = app_constants::ns_warn_rssi_dbm;
+  uint32_t weakRssiLogPeriodMs = app_constants::weak_rssi_log_ms;
 
-  uint32_t noWifiLogPeriodMs = 5000;
+  uint32_t noWifiLogPeriodMs = app_constants::no_wifi_log_ms;
 };
 
 struct NightscoutData {
@@ -44,11 +46,11 @@ struct NightscoutData {
   float    iob = NAN;
   float    cob = NAN;
 
-  // Заряд загрузчика Blueberry из pump.uploader.battery, в процентах.
-  int      uploaderBatPct = -1;
+  // Заряд выбранного источника в процентах; -1 — нет корректных данных.
+  int      batteryPct = -1;
   float    pumpBatV   = 0.0f;
 
-  float    sgvBounds[4] = {3.9f, 4.5f, 8.5f, 10.0f};
+  float    sgvBounds[4] = {app_constants::default_glucose_bounds[0], app_constants::default_glucose_bounds[1], app_constants::default_glucose_bounds[2], app_constants::default_glucose_bounds[3]};
 
   // Возраст вычисляется перед отрисовкой; INT32_MAX означает неизвестное время.
   int32_t  ageSec = INT32_MAX;
@@ -129,6 +131,6 @@ private:
   void scheduleRetry();
   void warnIfWeakRssi();
 
-  static constexpr size_t READ_CHUNK = 512;
-  static constexpr size_t BODY_MAX   = 32 * 1024;
+  static constexpr size_t READ_CHUNK = app_constants::http_read_chunk_bytes;
+  static constexpr size_t BODY_MAX   = app_constants::http_body_max_bytes;
 };

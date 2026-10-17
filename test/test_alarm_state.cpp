@@ -42,27 +42,51 @@ constexpr bool expiry_and_reentry() {
     return alarm.should_sound(61 * minute);
 }
 
-constexpr bool restart_selection_after_minute(uint32_t start) {
+constexpr bool restart_selection_after_two_seconds(uint32_t start) {
     for (uint8_t step = 1; step <= 4; ++step) {
         AlarmState alarm;
         alarm.update(start, true, true, true);
         for (uint8_t i = 0; i < step; ++i) alarm.cycle_snooze(start);
-        alarm.update(start + minute, true, true, true);
-        alarm.cycle_snooze(start + minute);
-        if (alarm.snooze_minutes() != step * 30
-            || alarm.remaining_seconds(start + minute) != step * 1800) return false;
-        alarm.cycle_snooze(start + minute + 1000);
-        if (alarm.snooze_minutes() != ((step + 1) % 5) * 30) return false;
+        alarm.cycle_snooze(start + 2000);
+        if (alarm.snooze_minutes() != 30 || alarm.remaining_seconds(start + 2000) != 1800) return false;
+        alarm.cycle_snooze(start + 3999);
+        if (alarm.snooze_minutes() != 60) return false;
     }
     AlarmState alarm;
     alarm.update(start, true, true, true);
-    alarm.cycle_snooze(start);
-    alarm.cycle_snooze(start + minute - 1);
+    for (unsigned i=0; i<5; ++i) {
+        alarm.cycle_snooze(start + i * 100);
+        alarm.update(start + i * 100, true, true, true);
+    }
+    if (alarm.remaining_seconds(start + 400) || !alarm.should_sound(start + 400)) return false;
+    alarm.cycle_snooze(start + 500);
+    if (alarm.snooze_minutes() != 30) return false;
+    alarm.cycle_snooze(start + 2499);
     return alarm.snooze_minutes() == 60;
 }
+static_assert(restart_selection_after_two_seconds(0), "Restart from 1x at 2s; advance strictly before 2s, including OFF -> 1x");
+static_assert(restart_selection_after_two_seconds(UINT32_MAX - 1000), "Selection window survives millis wrap");
 
-static_assert(restart_selection_after_minute(0), "Restore each selected duration after 60s; advance before 60s");
-static_assert(restart_selection_after_minute(UINT32_MAX - 30000), "Selection reset survives millis wrap");
+constexpr bool lan_snooze() {
+    AlarmState alarm;
+    const uint32_t start = UINT32_MAX - 1000;
+    alarm.update(start, true, true, false);
+    alarm.receive_snooze(start, 3600);
+    if (alarm.remaining_seconds(start + 1000) != 3599 || alarm.snooze_minutes() != 60) return false;
+    alarm.update(start + 2000, true, true, true);
+    if (alarm.should_sound(start + 2000)) return false;
+    alarm.cycle_snooze(start + 2001);
+    if (alarm.snooze_minutes() != 30) return false;
+    alarm.receive_snooze(start + 2100, 86401);
+    if (alarm.snooze_minutes() != 30) return false;
+    alarm.receive_snooze(start + 2200, 0);
+    if (!alarm.should_sound(start + 2200)) return false;
+    alarm.receive_snooze(start + 2300, 24 * 3600);
+    if (alarm.snooze_minutes() != 1440) return false;
+    alarm.update(start + 2300 + 86400000, true, true, true);
+    return alarm.should_sound(start + 2300 + 86400000) && !alarm.snooze_minutes();
+}
+static_assert(lan_snooze(), "LAN: preemptive pause, common alarm suppression, cancel, validation, expiry and wrap");
 
 constexpr bool disabled_and_invalid() {
     AlarmState alarm;

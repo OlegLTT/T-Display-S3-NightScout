@@ -1,5 +1,7 @@
 // Получение данных Nightscout по HTTP/HTTPS с повторными попытками и разбором JSON.
+#include "app_constants.h"
 #include "nightscout_client.h"
+#include "nightscout_alarm_state.h"
 #include "logs.h"
 #include <math.h>
 #include <time.h>
@@ -9,6 +11,7 @@
 using su::SH;
 
 void NightscoutClient::begin(const NSConfig& cfg) {
+  abortReq();
   _cfg = cfg;
   _hostBackoffMs = 0;
   _retryCount = 0;
@@ -109,7 +112,7 @@ void NightscoutClient::warnIfWeakRssi() {
     uint32_t now = millis();
     if (now - _lastWeakLogMs >= _cfg.weakRssiLogPeriodMs) {
       _lastWeakLogMs = now;
-      logs::logWf("[WIFI] weak signal RSSI=%d dBm -> NS request anyway", rssi);
+      logs::logWf("[Wi-Fi] Weak signal: RSSI=%d dBm; continuing request", rssi);
     }
   }
 }
@@ -118,7 +121,7 @@ void NightscoutClient::warnIfWeakRssi() {
 void NightscoutClient::scheduleRetry() {
 
   if (_cfg.retryMax != 0 && _retryCount >= _cfg.retryMax) {
-    logs::logEf("[NS] request failed -> retries exhausted (%u)", (unsigned)_cfg.retryMax);
+    logs::logEf("[NS] Request failed: retries exhausted (%u)", (unsigned)_cfg.retryMax);
     _wantUpdate = false;
     _r.ph = Phase::Idle;
     return;
@@ -129,7 +132,7 @@ void NightscoutClient::scheduleRetry() {
 
   _wantUpdate = true;
 
-  logs::logWf("[NS] request failed -> retry #%u in %ums",
+  logs::logWf("[NS] Request failed: retry %u in %u ms",
               (unsigned)_retryCount,
               (unsigned)_cfg.retryDelayMs);
 
@@ -150,7 +153,7 @@ void NightscoutClient::startReq(const String& base) {
 
   if (_r.https && _cfg.tlsInsecure) _r.cs.setInsecure();
 
-  logs::logIf("[NS] startReq GET %s", _r.path.c_str());
+  logs::logI("[NS] Requesting properties"); // Не записывать токен из query string в журнал.
 }
 
 void NightscoutClient::abortReq() {
@@ -166,7 +169,7 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
 
   if ((r.ph == Phase::Connect || r.ph == Phase::Send || r.ph == Phase::ReadHeaders || r.ph == Phase::ReadBody) &&
       (now - r.tLastIO) > _cfg.httpTimeoutMs) {
-    logs::logEf("[NS] timeout phase=%d", (int)r.ph);
+    logs::logEf("[NS] Request timeout, phase=%d", (int)r.ph);
     r.ph = Phase::Error;
   }
 
@@ -175,16 +178,16 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
   switch (r.ph) {
     case Phase::Connect: {
       warnIfWeakRssi();
-      logs::logIf("[NS] Connect %s:%u https=%d", r.host.c_str(), (unsigned)r.port, (int)r.https);
+      logs::logIf("[NS] Connecting to %s:%u, HTTPS=%d", r.host.c_str(), (unsigned)r.port, (int)r.https);
 
       bool ok = c->connect(r.host.c_str(), r.port);
       r.tLastIO = now;
 
       if (!ok) {
-        logs::logE("[NS] connect failed");
+        logs::logE("[NS] Connection failed");
         r.httpCode = -1;
 
-        const uint32_t backoff = (_cfg.hostErrorBackoffMs > 0) ? _cfg.hostErrorBackoffMs : 60000;
+        const uint32_t backoff = (_cfg.hostErrorBackoffMs > 0) ? _cfg.hostErrorBackoffMs : app_constants::host_error_backoff_ms;
         _hostErrorAtMs = millis();
         _hostBackoffMs = backoff;
 
@@ -198,7 +201,7 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
     }
 
     case Phase::Send: {
-      logs::logI("[NS] Send request (HTTP/1.0 no-chunked)");
+      logs::logI("[NS] Sending HTTP/1.0 request");
 
       String req =
         String("GET ") + r.path + " HTTP/1.0\r\n" +
@@ -225,7 +228,7 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
           line.trim();
 
           if (line.isEmpty()) {
-            logs::logIf("[NS] Headers done (http=%d len=%d)", r.httpCode, r.contentLen);
+            logs::logIf("[NS] Headers: HTTP=%d, length=%d", r.httpCode, r.contentLen);
             r.ph = Phase::ReadBody;
             break;
           }
@@ -242,7 +245,7 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
           }
         }
 
-        if (r.headerLine.length() > 1024) { r.ph = Phase::Error; break; }
+        if (r.headerLine.length() > app_constants::http_header_max_bytes) { r.ph = Phase::Error; break; }
       }
       return false;
     }
@@ -266,7 +269,7 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
       // Не заменяем ошибку превышения размера тела успешным завершением при закрытии соединения.
       if (r.ph == Phase::Error) return false;
       if (!c->connected() && !c->available()) {
-        logs::logIf("[NS] Body done (len=%u)", (unsigned)r.body.length());
+        logs::logIf("[NS] Response received: %u bytes", (unsigned)r.body.length());
         r.ph = Phase::Done;
       }
       return false;
@@ -278,13 +281,13 @@ bool NightscoutClient::stepReq(NightscoutData& out) {
       out.ok   = false;
 
       if (r.httpCode != 200) {
-        logs::logEf("[NS] HTTP %d (len=%u)", r.httpCode, (unsigned)r.body.length());
+        logs::logEf("[NS] HTTP error %d, response=%u bytes", r.httpCode, (unsigned)r.body.length());
         abortReq();
         return true;
       }
 
       sanitizeJson(r.body);
-      logs::logI("[NS] Parse v2/properties via GSON...");
+      logs::logI("[NS] Parsing v2/properties with GSON");
 
       if (!parseV2Properties(r.body, out)) {
         out.ok = false;
@@ -325,7 +328,7 @@ bool NightscoutClient::tick(NightscoutData& out) {
     if (_wantUpdate) {
       if (now - _lastNoWifiLogMs >= _cfg.noWifiLogPeriodMs) {
         _lastNoWifiLogMs = now;
-        logs::logW("[NS] no WiFi -> wait");
+        logs::logW("[NS] No Wi-Fi, waiting");
       }
     }
     return false;
@@ -349,7 +352,7 @@ bool NightscoutClient::tick(NightscoutData& out) {
       String base = buildBase(_cfg.baseUrl);
 
       if (base.isEmpty()) {
-        logs::logE("[NS] baseUrl empty");
+        logs::logE("[NS] Server URL is empty");
         applyBounds(out);
         out.ok = false;
         out.http = 0;
@@ -415,13 +418,13 @@ static int entryToBatteryPercent(gson::Entry e) {
   return static_cast<int>(percent);
 }
 
-// Разбор свойств Nightscout; заряд загрузчика и напряжение помпы — разные показатели.
+// Разбор свойств Nightscout; проценты заряда и напряжение помпы — разные показатели.
 bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out) const {
   gson::Parser p;
   p.reserve(250);
 
   if (!p.parse(json) || p.hasError()) {
-    logs::logEf("[NS] GSON parse error: %s at %d", p.readError(), p.errorIndex());
+    logs::logEf("[NS] JSON parse error: code=%u, position=%d", unsigned(p.getError()), p.errorIndex());
     return false;
   }
 
@@ -429,18 +432,19 @@ bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out
 
   gson::Entry bgnow = p.get(SH("bgnow"));
   if (!bgnow) {
-    logs::logE("[NS] no 'bgnow'");
+    logs::logE("[NS] Response missing bgnow");
     return false;
   }
 
   gson::Entry sgvs = bgnow.get(SH("sgvs"));
   if (!sgvs || sgvs.length() <= 0) {
-    logs::logE("[NS] no 'bgnow.sgvs'");
+    logs::logE("[NS] Response missing bgnow.sgvs");
     return false;
   }
 
   gson::Entry sg0 = sgvs.get((int)0);
-  out.sgv_mmol = entryToFloatAny(sg0.get(SH("scaled")));
+  const float mgdl = entryToFloatAny(sg0.get(SH("mgdl")));
+  out.sgv_mmol = isfinite(mgdl) ? ns_alarm::mgdl_to_mmol(mgdl) : entryToFloatAny(sg0.get(SH("scaled")));
   out.update_time_ms = (uint64_t)bgnow.get(SH("mills")).toInt64();
 
   strlcpy(out.trend, "N/A", sizeof(out.trend));
@@ -461,42 +465,47 @@ bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out
   gson::Entry cob = p.get(SH("cob"));
   out.cob = cob ? entryToFloatAny(cob.get(SH("cob"))) : NAN;
 
-  out.uploaderBatPct = -1;
+  out.batteryPct = -1;
   out.pumpBatV   = 0.0f;
   gson::Entry batteryPercent;
-  char uploaderName[32] = "";
+  int blueberryPercent = -1;
+  int pumpPercent = -1;
 
   gson::Entry pump = p.get(SH("pump"));
   if (pump) {
-
-    gson::Entry uploader = pump.get(SH("uploader"));
-    batteryPercent = uploader.get(SH("battery"));
-    out.uploaderBatPct = entryToBatteryPercent(batteryPercent);
-    entryToCstr(uploader.get(SH("name")), uploaderName, sizeof(uploaderName));
+    const gson::Entry uploader = pump.get(SH("uploader"));
+    const gson::Entry blueberryBattery = uploader.get(SH("battery"));
+    blueberryPercent = entryToBatteryPercent(blueberryBattery);
+    if (_cfg.batterySource == BatterySource::Blueberry) batteryPercent = blueberryBattery;
 
     gson::Entry pump_inner = pump.get(SH("pump"));
     if (pump_inner) {
       gson::Entry bat = pump_inner.get(SH("battery"));
       if (bat) {
+        const gson::Entry pumpBattery = bat.get(SH("percent"));
+        pumpPercent = entryToBatteryPercent(pumpBattery);
+        if (_cfg.batterySource == BatterySource::Pump) batteryPercent = pumpBattery;
         float v = entryToFloatAny(bat.get(SH("voltage")));
         if (!isnan(v) && v > 0.0f) out.pumpBatV = v;
       }
     }
   }
 
+  out.batteryPct = battery_percent_for_source(_cfg.batterySource, blueberryPercent, pumpPercent);
   char rawPercent[24] = "<missing>";
   if (batteryPercent && !entryToCstr(batteryPercent, rawPercent, sizeof(rawPercent))) {
-    strlcpy(rawPercent, "<empty/long>", sizeof(rawPercent));
+    strlcpy(rawPercent, "<error>", sizeof(rawPercent));
   }
-  logs::logIf("[NS] battery: source=pump.uploader.battery name=%s raw='%s' pct=%d%%",
-              uploaderName[0] ? uploaderName : "<missing>", rawPercent, out.uploaderBatPct);
+  logs::logIf("[NS] Battery: %s='%s', result=%d%%",
+              _cfg.batterySource == BatterySource::Pump ? "pump.pump.battery.percent" : "pump.uploader.battery",
+              rawPercent, out.batteryPct);
 
   char tbuf[32] = {0};
   bool haveTime = false;
 
   if (out.update_time_ms > 0) {
     time_t ts = (time_t)(out.update_time_ms / 1000ULL);
-    if (time(nullptr) > 100000 && ts > 0) {
+    if (time(nullptr) > app_constants::valid_epoch_seconds && ts > 0) {
       struct tm tmv;
       localtime_r(&ts, &tmv);
       if (strftime(tbuf, sizeof(tbuf), "%H:%M:%S", &tmv) > 0) haveTime = true;
@@ -506,14 +515,14 @@ bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out
     snprintf(tbuf, sizeof(tbuf), "%llu", (unsigned long long)out.update_time_ms);
   }
 
-  logs::logIf("[NS] parsed: sgv=%.1f mmol trend=%s delta=%.2f iob=%.2f cob=%.0f upbat=%d%% pumpV=%.2f t=%s elems=%u bytes=%u",
-              out.sgv_mmol, out.trend, out.delta_mmol, out.iob, out.cob,
-              out.uploaderBatPct, out.pumpBatV,
-              tbuf,
+  logs::logIf("[NS] Glucose %.1f; trend %s; delta %.2f; time %s",
+              out.sgv_mmol, out.trend, out.delta_mmol, tbuf);
+  logs::logIf("[NS] IOB=%.2f, COB=%.0f, battery=%d%%, pump=%.2f V; JSON=%u/%u",
+              out.iob, out.cob, out.batteryPct, out.pumpBatV,
               (unsigned)p.length(), (unsigned)p.size());
 
   if (isnan(out.sgv_mmol) || out.update_time_ms == 0) {
-    logs::logW("[NS] parsed but missing sgv/time");
+    logs::logW("[NS] Glucose or measurement time missing");
     return false;
   }
 

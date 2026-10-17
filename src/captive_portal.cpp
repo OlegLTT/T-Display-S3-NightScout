@@ -1,4 +1,5 @@
 // Точка доступа и веб-настройки: DNS-перенаправление, сохранение параметров и тест звука.
+#include "app_constants.h"
 #include "captive_portal.h"
 #include "board_config.h"
 
@@ -15,7 +16,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Настройка</title>
 <style>
-  :root { --red:#d32f2f; --yellow:#fbc02d; --green:#2e7d32; }
+  :root { --red:#d32f2f; --yellow:#ffff00; --green:#2e7d32; }
 
   body{
     margin:0;
@@ -245,6 +246,16 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   </div>
 
   <div class="card">
+    <label for="batterySource">Источник заряда батареи на экране</label>
+    <select id="batterySource">
+      <option value="0">Blueberry</option>
+      <option value="1">Помпа</option>
+    </select>
+    <div class="muted">Показывается заряд выбранного устройства в процентах.
+      Если данных нет, на экране будет --%. Напряжение помпы в проценты не пересчитывается.</div>
+  </div>
+
+  <div class="card">
     <div style="font-size:16px; font-weight:650;">Часовой пояс</div>
 
     <div class="row2" style="margin-top:10px%;">
@@ -273,8 +284,12 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     </div>
   </div>
 
-  <div class="card">
-    <div style="font-size:16px; font-weight:650;">Границы подсветки SGV (mmol/L)</div>
+  <div class="card" id="nsConnectCard" style="display:none">
+    <button class="btn" id="connectNsBtn" type="button">Загрузить настройки из Nightscout</button>
+    <div class="muted" id="nsConnectStatus" role="status">Укажите сервер, токен и домашний Wi-Fi выше.</div>
+  </div>
+  <div class="card" id="boundsCard" style="display:none">
+    <div style="font-size:16px; font-weight:650;">Пороги глюкозы (ммоль/л)</div>
 
     <div class="band" id="band" style="margin-top:10px;">
       <div class="boundsRow">
@@ -286,21 +301,31 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     </div>
 
     <div class="muted">Должно быть строго: b0 &lt; b1 &lt; b2 &lt; b3</div>
+    <div class="muted" id="nsBoundsNotice" style="display:none">Границы загружены из Nightscout. В версии 15.0.8 они изменяются через параметры BG_* в панели сервера; штатный API не поддерживает их запись из устройства.</div>
   </div>
 
   <div class="card" id="alarmCard" style="display:none">
     <label style="display:flex;align-items:center;gap:10px">
       <input type="checkbox" id="soundAlarmEnabled" style="width:auto">
-      <span>Звуковая тревога: красная зона или нет свежих данных 15 минут</span>
+      <span id="alarmDescription">Звуковая тревога: красная зона или нет свежих данных <span id="expiryMinutes"></span> минут</span>
     </label>
-    <label for="alarmVolume">Громкость: <span id="alarmVolumeValue">31%</span></label>
-    <input type="range" id="alarmVolume" min="0" max="100" step="1" value="31">
+    <label for="alarmVolume">Громкость: <span id="alarmVolumeValue">—</span></label>
+    <input type="range" id="alarmVolume" min="0" max="100" step="1" value="0">
+    <div id="nsAlarmPrefs" style="display:none">
+      <label><input id="nsUseServer" type="checkbox" style="width:auto"> Использовать включение типов тревог с сервера</label>
+      <label><input id="nsEnabled0" type="checkbox" style="width:auto"> Критически низкая глюкоза</label>
+      <label><input id="nsEnabled1" type="checkbox" style="width:auto"> Низкая глюкоза</label>
+      <label><input id="nsEnabled2" type="checkbox" style="width:auto"> Высокая глюкоза</label>
+      <label><input id="nsEnabled3" type="checkbox" style="width:auto"> Критически высокая глюкоза</label>
+      <div class="muted">Snooze сразу отключает все звуковые тревоги. Быстрые нажатия перебирают паузы; после 2 секунд выбор начинается с первой.</div>
+      <div class="muted">Пауза и её отмена передаются устройствам с тем же адресом Nightscout в локальной сети, включая M5_NightscoutMon. Права на запись в Nightscout не нужны.</div>
+    </div>
     <button class="btn" id="testSoundBtn" type="button">Проверить сигнал</button>
     <div class="muted" id="soundTestStatus" role="status"></div>
-    <div class="muted" style="margin-top:8px">
+    <div class="muted" id="localAlarmHelp" style="margin-top:8px">
       Для красной зоны используются крайние границы SGV выше. Возраст данных
       отсчитывается от времени измерения. Кнопка на экране откладывает обе тревоги
-      последовательно на 30, 60, 90, 120 минут; следующее нажатие отменяет отсрочку.
+      последовательно на <span id="snoozeMinutes"></span> минут; следующее нажатие отменяет отсрочку. Нажимайте с интервалом меньше 2 секунд; после 2 секунд цикл начинается заново. Пауза и отмена синхронизируются по локальной сети.
     </div>
   </div>
 
@@ -348,7 +373,8 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       const response = await fetch('/test_sound', {method:'POST', body});
       if (!response.ok) throw new Error(await response.text());
       status.textContent = Number(alarmVolume.value) === 0
-        ? 'Громкость 0% — звук выключен.' : 'Проверочный сигнал отправлен.';
+        ? 'Громкость 0% — звук выключен.'
+        : 'Проверочный сигнал отправлен.';
     } catch (error) {
       status.textContent = 'Ошибка проверки: ' + error.message;
     } finally {
@@ -356,16 +382,98 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     }
   });
   let soundAlarmSupported = false;
+  let nsAlarmDevice = false;
+  let nsAlarmReady = false;
+  let nsDirty = false;
+  let nsLoadRequested = false;
+  let nsLoadEpoch = 0;
+
+  function resetNsLoad() {
+    nsLoadRequested=false;
+    ++nsLoadEpoch;
+    nsAlarmReady=false;
+    document.getElementById('boundsCard').style.display='none';
+    document.getElementById('alarmCard').style.display='none';
+  }
+
+  function showNsState(j, fill=false) {
+    nsAlarmDevice = !!j.nsAlarmDevice;
+    nsAlarmReady = nsLoadRequested && !!j.nsAlarmReady && j.nsOrigin === sanitizeHost(document.getElementById('host').value)
+        && j.token === document.getElementById('token').value.trim();
+    document.getElementById('nsConnectCard').style.display = nsAlarmDevice ? '' : 'none';
+    document.getElementById('nsAlarmPrefs').style.display = nsAlarmDevice && nsAlarmReady ? '' : 'none';
+    document.getElementById('boundsCard').style.display = !nsAlarmDevice || nsAlarmReady ? '' : 'none';
+    document.getElementById('alarmCard').style.display = soundAlarmSupported && (!nsAlarmDevice || nsAlarmReady) ? '' : 'none';
+    document.getElementById('nsBoundsNotice').style.display = nsAlarmDevice ? '' : 'none';
+    document.getElementById('localAlarmHelp').style.display = nsAlarmDevice ? 'none' : '';
+    for (let i=0;i<4;i++) document.getElementById('b'+i).readOnly = nsAlarmDevice;
+    document.getElementById('nsConnectStatus').textContent = nsAlarmDevice && !nsLoadRequested
+        ? 'Нажмите «Загрузить», чтобы показать пороги глюкозы и звуковые тревоги.'
+        : j.nsMessage || (nsAlarmReady ? 'Настройки загружены.' : 'Подключение к серверу…');
+    if (nsAlarmDevice) document.getElementById('alarmDescription').textContent = 'Звуковые тревоги Nightscout: только красная зона по свежим данным';
+    if (nsAlarmDevice && nsAlarmReady) {
+      if (fill) {
+        document.getElementById('nsUseServer').checked = !j.nsOverride;
+        j.nsEnabled.forEach((enabled,i)=>document.getElementById('nsEnabled'+i).checked=enabled);
+      }
+      j.bounds.forEach((value,i)=>document.getElementById('b'+i).value=Number(value).toFixed(1));
+      updateGradient();
+    }
+  }
+  for (let i=0;i<4;i++) {
+    for (const id of ['nsEnabled'+i]) {
+      document.getElementById(id).addEventListener('input',()=>{ nsDirty=true; document.getElementById('nsUseServer').checked=false; });
+    }
+  }
+  document.getElementById('nsUseServer').addEventListener('input',()=>{ nsDirty=true; });
+  document.getElementById('connectNsBtn').addEventListener('click',async()=>{
+    const status=document.getElementById('nsConnectStatus');
+    resetNsLoad();
+    const epoch=nsLoadEpoch;
+    try {
+      nsDirty=false;
+      const form=new URLSearchParams({host:sanitizeHost(hostInp.value),token:tokenInp.value.trim()});
+      slots.forEach((slot,i)=>{
+        form.set('ssid'+i,(slot.ssid||'').trim());
+        form.set('passChanged'+i,slot.passDirty?'1':'0');
+        form.set('pass'+i,slot.passDirty?(slot.pass||''):'');
+      });
+      const response=await fetch('/connect_ns',{method:'POST',body:form});
+      if (epoch!==nsLoadEpoch) return;
+      if (!response.ok) throw new Error(await response.text());
+      nsLoadRequested=true;
+      status.textContent='Подключение к серверу…';
+    } catch(error) { if (epoch===nsLoadEpoch) status.textContent=error.message; }
+  });
+  setInterval(async()=>{
+    if (!nsAlarmDevice || !nsLoadRequested) return;
+    const epoch=nsLoadEpoch;
+    try {
+      const response=await fetch('/cfg',{cache:'no-store'});
+      if (epoch!==nsLoadEpoch) return;
+      if (response.ok) {
+        const state=await response.json();
+        if (epoch===nsLoadEpoch) showNsState(state,!nsDirty);
+      }
+    } catch(error) {
+      if (epoch===nsLoadEpoch) document.getElementById('nsConnectStatus').textContent='Нет связи с устройством';
+    }
+  },2000);
 
   const band = document.getElementById('band');
   const boundsInputs = [b0,b1,b2,b3];
 
   const hostInp = document.getElementById('host');
   const tokenInp = document.getElementById('token');
+  for (const input of [hostInp,tokenInp]) input.addEventListener('input',()=>{
+    if (!nsAlarmDevice) return;
+    resetNsLoad();
+    document.getElementById('nsConnectStatus').textContent='Настройки подключения изменены. Нажмите «Загрузить».';
+  });
 
 
   // Сеть хранит SSID, пароль, признаки сохранённого и изменённого пароля, а также идентификатор.
-  let slots = Array.from({length:5}, (_,i)=>({ssid:'', pass:'', hasPass:false, passDirty:false, id:i}));
+  let slots = []; // Число строк приходит из настроек прошивки вместе с данными сетей.
 
   // Нормализация адреса Nightscout перед отправкой на устройство.
   function sanitizeHost(s){
@@ -611,28 +719,34 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 
   // Загрузка текущих параметров устройства в форму.
   async function loadCfg(){
+    const epoch=nsLoadEpoch;
     const r = await fetch('/cfg', {cache:'no-store'});
+    if (!r.ok) throw new Error('Не удалось загрузить настройки');
     const j = await r.json();
+    if (epoch!==nsLoadEpoch) return;
 
     hostInp.value = sanitizeHost(j.host || "");
     tokenInp.value = (j.token || "");
 
-    slots = (j.wifi || []).slice(0,5).map((w,idx)=>({
+    slots = (j.wifi || []).map((w,idx)=>({
       ssid: w.ssid || "",
       pass: "",
       hasPass: !!w.hasPass,
       passDirty: false,
       id: idx
     }));
-    while(slots.length < 5) slots.push({ssid:'', pass:'', hasPass:false, passDirty:false, id:slots.length});
     renderAllSlots();
 
     dst.value = (j.dst ? '1':'0');
     soundAlarmSupported = !!j.soundAlarmSupported;
-    document.getElementById('alarmCard').style.display = soundAlarmSupported ? '' : 'none';
+    document.getElementById('alarmCard').style.display = soundAlarmSupported && !j.nsAlarmDevice ? '' : 'none';
     soundAlarmEnabled.checked = !!j.soundAlarmEnabled;
-    alarmVolume.value = j.alarmVolume ?? 31;
+    alarmVolume.value = j.alarmVolume;
+    document.getElementById('batterySource').value = String(j.batterySource);
     alarmVolumeValue.textContent = alarmVolume.value + '%';
+    const expiryLabel=document.getElementById('expiryMinutes');
+    if (expiryLabel) expiryLabel.textContent = j.expiryMinutes;
+    document.getElementById('snoozeMinutes').textContent = j.snoozeMinutes.join(', ');
 
     const cur = Number(j.tzMin ?? 0);
     const found = Array.from(tzSel.options).find(o => o.value === String(cur));
@@ -649,10 +763,11 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       tzM.value = String(a%60);
     }
 
-    if(Array.isArray(j.bounds) && j.bounds.length===4){
+    if(!j.nsAlarmDevice && Array.isArray(j.bounds) && j.bounds.length===4){
       j.bounds.forEach((v,i)=>boundsInputs[i].value = Number(v).toFixed(1));
     }
     updateGradient();
+    showNsState(j,true);
   }
 
   // Отправка настроек и выход из портала.
@@ -660,15 +775,15 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     msgEl.textContent='';
     msgEl.className='msg';
 
-    const nums = boundsInputs.map((el,idx)=>{
+    const nums = nsAlarmDevice ? [] : boundsInputs.map((el,idx)=>{
       const v = el.value.trim();
       if(!/^\d+(\.\d)?$/.test(v)) throw new Error(`Граница ${idx+1}: число с 1 десятичным знаком`);
       return parseFloat(v);
     });
-    if(!validateBounds(nums)) throw new Error('Границы должны строго возрастать');
+    if(!nsAlarmDevice && !validateBounds(nums)) throw new Error('Границы должны строго возрастать');
 
     const form = new URLSearchParams();
-    for(let i=0;i<5;i++){
+    for(let i=0;i<slots.length;i++){
       const slot = slots[i] || {ssid:'', pass:'', hasPass:false, passDirty:false};
       form.set('ssid'+i, (slot.ssid || '').trim());
 
@@ -691,8 +806,15 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 
     form.set('tzOff', String(tzOffMin));
     form.set('dst', dst.value === '1' ? '1' : '0');
+    form.set('batterySource', document.getElementById('batterySource').value);
     if (soundAlarmSupported) form.set('soundAlarmEnabled', soundAlarmEnabled.checked ? '1' : '0');
     if (soundAlarmSupported) form.set('alarmVolume', alarmVolume.value);
+    if (nsAlarmDevice && nsAlarmReady) {
+      form.set('nsOverride',document.getElementById('nsUseServer').checked?'0':'1');
+      for (let i=0;i<4;i++) {
+        form.set('nsEnabled'+i,document.getElementById('nsEnabled'+i).checked?'1':'0');
+      }
+    }
     nums.forEach((v,i)=>form.set('b'+i, v.toFixed(1)));
 
     // Перед отправкой убираем из адреса лишние части URL.
@@ -774,10 +896,15 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   window.addEventListener('scroll', updateGradient, {passive:true});
 
   window.addEventListener('load', async ()=>{
-    buildTzList();
-    setCustomEnabled(false);
-    await loadCfg();
-    requestAnimationFrame(()=>requestAnimationFrame(updateGradient));
+    try {
+      buildTzList();
+      setCustomEnabled(false);
+      await loadCfg();
+      requestAnimationFrame(()=>requestAnimationFrame(updateGradient));
+    } catch (error) {
+      msgEl.textContent = 'Ошибка загрузки настроек. Обновите страницу. ' + error.message;
+      msgEl.className = 'msg err';
+    }
   });
 </script>
 </body>
@@ -796,7 +923,7 @@ static bool parseVolume(const String& value, uint8_t& result) {
   return true;
 }
 
-static String genApPass(uint8_t len = 10) {
+static String genApPass(uint8_t len = app_constants::portal_password_length) {
 
   if (len < 8) len = 8;
 
@@ -892,27 +1019,23 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
 
   WiFi.setAutoReconnect(false);
   WiFi.persistent(false);
-  WiFi.disconnect(true);
-  delay(200);
-
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
 
   WiFi.softAPConfig(_apIP, _apIP, IPAddress(255, 255, 255, 0));
 
-  _apPass = genApPass(8);
+  _apPass = genApPass();
 
   bool apOk = WiFi.softAP(_apSsid.c_str(), _apPass.c_str());
   if (!apOk) {
-    logE("[AP] softAP failed");
+    logE("[AP] Failed to start access point");
     return false;
   }
 
-  delay(150);
-  if (!forceApDnsToSelf(_apIP)) logE("[AP] DHCP DNS configuration failed");
+  if (!forceApDnsToSelf(_apIP)) logE("[AP] Failed to configure DHCP DNS");
 
   logI(String("[AP] SSID: ") + _apSsid);
-  logI(String("[AP] PASS: ") + _apPass);
-  logI(String("[AP] IP  : ") + WiFi.softAPIP().toString());
+  logI(String("[AP] Password: ") + _apPass);
+  logI(String("[AP] IP: ") + WiFi.softAPIP().toString());
 
   if (!_evtInstalled) {
     _evtInstalled = true;
@@ -926,7 +1049,7 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
                  info.wifi_ap_staconnected.mac[0], info.wifi_ap_staconnected.mac[1],
                  info.wifi_ap_staconnected.mac[2], info.wifi_ap_staconnected.mac[3],
                  info.wifi_ap_staconnected.mac[4], info.wifi_ap_staconnected.mac[5]);
-        logI(String("[AP] STA connected: ") + mac);
+        logI(String("[AP] Client connected: ") + mac);
       }
 
       if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
@@ -935,7 +1058,7 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
                  info.wifi_ap_stadisconnected.mac[0], info.wifi_ap_stadisconnected.mac[1],
                  info.wifi_ap_stadisconnected.mac[2], info.wifi_ap_stadisconnected.mac[3],
                  info.wifi_ap_stadisconnected.mac[4], info.wifi_ap_stadisconnected.mac[5]);
-        logI(String("[AP] STA disconnected: ") + mac);
+        logI(String("[AP] Client disconnected: ") + mac);
       }
     });
   }
@@ -943,7 +1066,7 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
   _dns.setErrorReplyCode(DNSReplyCode::NoError);
   _dns.setTTL(0);
   if (!_dns.start(53, "*", _apIP)) {
-    logE("[AP] DNS server failed");
+    logE("[AP] Failed to start DNS server");
     WiFi.softAPdisconnect(true);
     return false;
   }
@@ -955,7 +1078,7 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
   };
 
   auto logReq = [this]() {
-    logI(String("[HTTP] host=") + _srv.hostHeader() + " uri=" + _srv.uri());
+    logI(String("[HTTP] Host=") + _srv.hostHeader() + " path=" + _srv.uri());
   };
 
   auto sendPortal = [this, noCache, logReq]() {
@@ -986,6 +1109,22 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
     handleSave();
   });
 
+  _srv.on("/connect_ns", HTTP_POST, [this, noCache] {
+    noCache();
+    AppSettings draft = *_settings;
+    if (!readConnectionForm(draft) || !draft.hostSite[0]) {
+      _srv.send(400,"text/plain; charset=utf-8","Проверьте адрес сервера и данные Wi-Fi"); return;
+    }
+    bool haveNetwork=false;
+    for (unsigned i=0;i<MAX_WIFI;++i) haveNetwork |= draft.wifi[i].ssid[0]!=0;
+    if (!haveNetwork && WiFi.status()!=WL_CONNECTED) {
+      _srv.send(400,"text/plain; charset=utf-8","Укажите домашнюю сеть Wi-Fi"); return;
+    }
+    _nsState=ns_alarm::Snapshot{};
+    _connectionDraft=draft; _connectionPending=true;
+    _srv.send(202,"text/plain","Connecting");
+  });
+
   // Тест ставится в очередь; воспроизведение выполняется в основном цикле без задержки HTTP.
   _srv.on("/test_sound", HTTP_POST, [this, noCache]() {
     noCache();
@@ -1003,16 +1142,14 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
     logReq();
     noCache();
     _srv.send(200, "text/plain; charset=utf-8", "OK");
-    delay(150);
-    ESP.restart();
+    scheduleRestart();
   });
 
   _srv.on("/reboot", HTTP_POST, [this, logReq, noCache] {
     logReq();
     noCache();
     _srv.send(200, "text/plain; charset=utf-8", "OK");
-    delay(150);
-    ESP.restart();
+    scheduleRestart();
   });
 
   _srv.on("/favicon.ico", HTTP_GET, [this, logReq, noCache] {
@@ -1061,8 +1198,7 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
 
     if (_store->factoryReset(*_settings)) {
       _srv.send(200, "text/plain; charset=utf-8", "OK");
-      delay(150);
-      ESP.restart();
+      scheduleRestart();
     } else {
       _srv.send(500, "text/plain; charset=utf-8", "factory reset failed");
     }
@@ -1090,6 +1226,7 @@ void CaptivePortal::stop() {
 
 // Обслуживание DNS и HTTP должно регулярно вызываться из основного цикла.
 void CaptivePortal::tick() {
+  if (_restartPending && uint32_t(millis()-_restartAt)>=150) ESP.restart();
   if (!_active) return;
   _dns.processNextRequest();
   _srv.handleClient();
@@ -1122,63 +1259,86 @@ void CaptivePortal::handleCfg() {
   j += "\"dst\":" + String(_settings->dstEnable ? "true" : "false") + ",";
   j += "\"soundAlarmEnabled\":" + String(_settings->soundAlarmEnabled ? "true" : "false") + ",";
   j += "\"alarmVolume\":" + String(_settings->alarmVolume) + ",";
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+  j += "\"nsAlarmDevice\":true,";
+#else
+  j += "\"nsAlarmDevice\":false,";
+#endif
+  const bool nsReady=ns_alarm::server_settings_ready(_nsState,_settings->hostSite);
+  j += "\"nsAlarmReady\":" + String(nsReady?"true":"false") + ",";
+  j += "\"nsOrigin\":\"" + escJson(_nsState.preferences.origin) + "\",";
+  j += "\"nsOverride\":" + String(_settings->nsAlarms.overridden?"true":"false") + ",";
+  j += "\"nsMessage\":\"" + escJson(_nsState.message) + "\",";
+  j += "\"nsEnabled\":[";
+  for (unsigned k=0;k<4;++k) { if (k) j+=','; j+=(_settings->nsAlarms.enabledMask&(1u<<k))?"true":"false"; }
+  j += "],\"nsMinutes\":[";
+  for (unsigned k=0;k<4;++k) {
+    if (k) j+=','; j+='[';
+    for (unsigned i=0;i<_settings->nsAlarms.counts[k];++i) { if(i) j+=','; j+=String(_settings->nsAlarms.minutes[k][i]); }
+    j+=']';
+  }
+  j += "],";
+  j += "\"batterySource\":" + String(static_cast<uint8_t>(_settings->batterySource)) + ",";
+  j += "\"expiryMinutes\":" + String(app_constants::data_expiry_seconds / 60) + ",";
+  j += "\"snoozeMinutes\":[";
+  for (unsigned step = 1; step <= app_constants::snooze_steps; ++step) {
+    if (step > 1) j += ",";
+    j += String(step * app_constants::snooze_step_minutes);
+  }
+  j += "],";
 #if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
   j += "\"soundAlarmSupported\":true,";
 #else
   j += "\"soundAlarmSupported\":false,";
 #endif
-  j += "\"bounds\":[" +
-       String(_settings->sgvBounds[0], 1) + "," +
-       String(_settings->sgvBounds[1], 1) + "," +
-       String(_settings->sgvBounds[2], 1) + "," +
-       String(_settings->sgvBounds[3], 1) + "]";
+  j += "\"bounds\":[";
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+  const float* bounds=_nsState.bounds;
+  const bool showBounds=nsReady;
+#else
+  const float* bounds=_settings->sgvBounds;
+  const bool showBounds=true;
+#endif
+  if (showBounds) for (unsigned i=0;i<4;++i) { if (i) j+=','; j+=String(bounds[i],1); }
+  j += ']';
   j += "}";
 
   _srv.send(200, "application/json; charset=utf-8", j);
 }
 
 // Проверяем поля до записи и обновляем рабочие параметры только после успешного сохранения.
+bool CaptivePortal::readConnectionForm(AppSettings& s) {
+  for (int i=0;i<MAX_WIFI;++i) {
+    String ssid=_srv.arg("ssid"+String(i)); ssid.trim();
+    const String password=_srv.arg("pass"+String(i));
+    if (ssid.length()>=sizeof(s.wifi[i].ssid) || password.length()>=sizeof(s.wifi[i].pass)) return false;
+    s.wifi[i].pass[0]=0;
+    strlcpy(s.wifi[i].ssid,ssid.c_str(),sizeof(s.wifi[i].ssid));
+    if (_srv.arg("passChanged"+String(i))=="1") strlcpy(s.wifi[i].pass,password.c_str(),sizeof(s.wifi[i].pass));
+    else for (int j=0;j<MAX_WIFI;++j) {
+      if (ssid==_settings->wifi[j].ssid) { strlcpy(s.wifi[i].pass,_settings->wifi[j].pass,sizeof(s.wifi[i].pass)); break; }
+    }
+  }
+  String host=_srv.arg("host"); sanitizeHostInPlace(host);
+  String token=_srv.arg("token"); token.trim();
+  if (host.length()>=sizeof(s.hostSite) || token.length()>=sizeof(s.nsToken)) return false;
+  strlcpy(s.hostSite,host.c_str(),sizeof(s.hostSite));
+  strlcpy(s.nsToken,token.c_str(),sizeof(s.nsToken));
+  return true;
+}
+
 void CaptivePortal::handleSave() {
   if (!_settings || !_store) {
-    logE("[HTTP] /save: no store/settings");
+    logE("[HTTP] /save: settings storage unavailable");
     _srv.send(500, "text/plain; charset=utf-8", "no store/settings");
     return;
   }
 
   AppSettings s = *_settings;
 
-  for (int i = 0; i < MAX_WIFI; i++) {
-    String ss = _srv.arg("ssid" + String(i));
-    String pw = _srv.arg("pass" + String(i));
-    String ch = _srv.arg("passChanged" + String(i));
-
-    ss.trim();
-    pw.trim();
-    ch.trim();
-
-    if (ss.length() == 0) {
-
-      s.wifi[i].ssid[0] = 0;
-      s.wifi[i].pass[0] = 0;
-    } else {
-      strlcpy(s.wifi[i].ssid, ss.c_str(), sizeof(s.wifi[i].ssid));
-
-      if (ch == "1") {
-
-        strlcpy(s.wifi[i].pass, pw.c_str(), sizeof(s.wifi[i].pass));
-      } else {
-
-      }
-    }
+  if (!readConnectionForm(s)) {
+    _srv.send(400,"text/plain","Invalid connection settings"); return;
   }
-
-  String host = _srv.arg("host");
-  sanitizeHostInPlace(host);
-  strlcpy(s.hostSite, host.c_str(), sizeof(s.hostSite));
-
-  String token = _srv.arg("token");
-  token.trim();
-  strlcpy(s.nsToken, token.c_str(), sizeof(s.nsToken));
 
   String tzStr = _srv.arg("tzOff");
   if (tzStr.length() == 0) tzStr = _srv.arg("tzMin");
@@ -1189,6 +1349,15 @@ void CaptivePortal::handleSave() {
 
   s.tzMinutes = (int16_t)tz;
   s.dstEnable = (_srv.arg("dst") == "1");
+  // Старая форма без этого поля сохраняет прежний выбор источника.
+  if (_srv.hasArg("batterySource")) {
+    const String source = _srv.arg("batterySource");
+    if (source != "0" && source != "1") {
+      _srv.send(400, "text/plain; charset=utf-8", "invalid batterySource");
+      return;
+    }
+    s.batterySource = source == "1" ? BatterySource::Pump : BatterySource::Blueberry;
+  }
 #if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
   if (_srv.hasArg("soundAlarmEnabled")) {
     const String alarmEnabled = _srv.arg("soundAlarmEnabled");
@@ -1204,6 +1373,27 @@ void CaptivePortal::handleSave() {
   }
 #endif
 
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+  const bool nsReady=ns_alarm::server_settings_ready(_nsState,s.hostSite)
+      && strcmp(s.nsToken,_settings->nsToken)==0;
+  // status.json выдаёт параметры запуска BG_*, API записи в Nightscout 15.0.8 нет.
+  // Старую/вручную изменённую форму не сохраняем локально под видом записи на сервер.
+  for (unsigned i=0;i<4;++i) {
+    if (_srv.hasArg("b"+String(i))) {
+      const float value=toF(_srv.arg("b"+String(i)));
+      if (!nsReady || !std::isfinite(value) || fabsf(value-_nsState.bounds[i])>0.051f) {
+        logE("[NS SETTINGS] Server threshold write unavailable: configure BG_* in hosting panel");
+        _srv.send(409,"text/plain; charset=utf-8","Пороги не сохранены: измените BG_* в панели Jino и загрузите их заново. Штатный API Nightscout не поддерживает запись этих параметров.");
+        return;
+      }
+    }
+    if (_srv.hasArg("nsMinutes"+String(i))) {
+      _srv.send(400,"text/plain; charset=utf-8","Snooze использует общий локальный цикл. Обновите страницу настроек.");
+      return;
+    }
+  }
+  if (nsReady) memcpy(s.sgvBounds,_nsState.bounds,sizeof(s.sgvBounds));
+#else
   for (int i = 0; i < 4; i++) {
     s.sgvBounds[i] = toF(_srv.arg("b" + String(i)));
   }
@@ -1211,6 +1401,30 @@ void CaptivePortal::handleSave() {
     _srv.send(400, "text/plain; charset=utf-8", "bounds must be strictly increasing");
     return;
   }
+#endif
+
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+  if (strcmp(s.nsAlarms.origin,s.hostSite)!=0) s.nsAlarms=ns_alarm::Preferences{};
+  if (_srv.hasArg("nsOverride")) {
+    if (!nsReady) { _srv.send(409,"text/plain; charset=utf-8","Сначала загрузите настройки из выбранного сервера."); return; }
+    s.nsAlarms=_nsState.preferences;
+    const String overrideValue=_srv.arg("nsOverride");
+    if (overrideValue!="0" && overrideValue!="1") { _srv.send(400,"text/plain","Invalid nsOverride"); return; }
+    s.nsAlarms.overridden=overrideValue=="1";
+    s.nsAlarms.enabledMask=0;
+    for (unsigned k=0;k<4;++k) {
+      const String enabled=_srv.arg("nsEnabled"+String(k));
+      if (enabled!="0" && enabled!="1") {
+        _srv.send(400,"text/plain; charset=utf-8","Некорректное включение типа тревоги"); return;
+      }
+      if (enabled=="1") s.nsAlarms.enabledMask |= 1u<<k;
+    }
+    if (!s.nsAlarms.overridden) {
+      s.nsAlarms=_nsState.preferences;
+      memcpy(s.sgvBounds,_nsState.bounds,sizeof(s.sgvBounds));
+    }
+  }
+#endif
 
   s.onboardingDone = true;
 

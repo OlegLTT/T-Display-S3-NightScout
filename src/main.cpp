@@ -1,4 +1,5 @@
 // Запуск устройства и общий цикл: экраны, кнопки, сеть, тревога и подсветка.
+#include "app_constants.h"
 #include <Arduino.h>
 #include "board_config.h"
 #include <WiFi.h>
@@ -20,20 +21,23 @@
 #include "ui_navigation.h"
 
 #include "nightscout_client.h"
+#include "nightscout_session.h"
 #include "nightscout_poll.h"
 #include "backlight.h"
+#include "buzzer.h"
 #include "ui_overlay.h"
 #include "logs.h"
 #include "wifi_manager.h"
 #include "alarm_state.h"
+#include "snooze_lan.h"
 #include "glucose_zone.h"
 
 #if defined(BOARD_TDISPLAY_S3)
-  #define UB_DEB_TIME 50
-  #define UB_HOLD_TIME 600
-  #define UB_STEP_TIME 400
-  #define UB_STEP_PRD 100
-  #define UB_CLICK_TIME 500
+  #define UB_DEB_TIME app_constants::button_debounce_ms
+  #define UB_HOLD_TIME app_constants::button_hold_ms
+  #define UB_STEP_TIME app_constants::button_step_delay_ms
+  #define UB_STEP_PRD app_constants::button_step_period_ms
+  #define UB_CLICK_TIME app_constants::button_click_ms
   #include <uButton.h>
   #include <uButtonMulti.h>
 #endif
@@ -52,14 +56,19 @@ static WifiManagerConfig wifiCfg;
 
 static LogBuffer g_logs;
 
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+static NightscoutSession g_ns;
+static ns_alarm::Snapshot nsAlarmSnapshot;
+static ns_alarm::Kind nsAlarmKind = ns_alarm::Kind::None;
+static uint32_t nsImportedRevision = 0;
+#else
 static NightscoutClient g_ns;
+#endif
 static NightscoutData   nsData;
 
 // Последний успешный ответ остаётся на экране при временных ошибках сети.
 static NightscoutData   lastGood;
 static bool             haveLastGood = false;
-
-static constexpr uint32_t UI_REFRESH_INTERVAL_MS = 15000;
 
 // При запуске журнал отображается до первого успешного ответа Nightscout.
 static bool bootWaitNsSecond = true;
@@ -77,7 +86,6 @@ static volatile bool g_rebootRequested = false;
 
 static time_t lastNtpSync = 0;
 static bool g_ntpWasValid = false;
-static constexpr time_t NTP_SYNC_PERIOD = 24 * 60 * 60;
 
 enum class ScreenId : uint8_t { SCREEN_MAIN, SCREEN_CLOCK, SCREEN_LOGS, SCREEN_SETTINGS };
 
@@ -93,7 +101,7 @@ static ScreenId desiredUiScreen = ScreenId::SCREEN_MAIN;
 static ScreenId g_pendingScreen = ScreenId::SCREEN_MAIN;
 static bool g_havePendingAnim = false;
 static lv_scr_load_anim_t g_pendingAnim = LV_SCR_LOAD_ANIM_NONE;
-static uint32_t g_pendingAnimTime = 250;
+static uint32_t g_pendingAnimTime = app_constants::default_animation_ms;
 static uint32_t g_pendingAnimDelay = 0;
 
 static lv_obj_t* screenById(ScreenId id) {
@@ -106,7 +114,7 @@ static lv_obj_t* screenById(ScreenId id) {
   }
 }
 
-static void requestScreen(ScreenId id, lv_scr_load_anim_t anim, uint32_t time=250, uint32_t delay=0) {
+static void requestScreen(ScreenId id, lv_scr_load_anim_t anim, uint32_t time=app_constants::default_animation_ms, uint32_t delay=0) {
   g_pendingScreen = id;
   g_pendingAnim = anim;
   g_pendingAnimTime = time;
@@ -141,17 +149,16 @@ static void changeScreen() {
   }
   if (currentScreen == ScreenId::SCREEN_MAIN) {
     currentScreen = ScreenId::SCREEN_CLOCK;
-    requestScreen(currentScreen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 220);
+    requestScreen(currentScreen, LV_SCR_LOAD_ANIM_MOVE_LEFT, app_constants::screen_animation_ms);
   } else {
     currentScreen = ScreenId::SCREEN_MAIN;
-    requestScreen(currentScreen, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 220);
+    requestScreen(currentScreen, LV_SCR_LOAD_ANIM_MOVE_RIGHT, app_constants::screen_animation_ms);
   }
 }
 
-// Переход в режим точки доступа отключает обычное подключение Wi-Fi.
+// AP+STA сохраняет соединение с Nightscout, пока открыты настройки.
 static void enterSettings() {
   currentScreen = ScreenId::SCREEN_SETTINGS;
-  WiFi.disconnect(true);
   portal.begin(&g_logs, &settingsStore, &appCfg);
   needUpdateScreen = true;
 }
@@ -160,30 +167,37 @@ static void enterSettings() {
 static void changeBacklight() {
   Backlight::nextStatic();
   uint8_t p = Backlight::currentPercentStatic();
-  brOverlay.show(p, 2000);
+  brOverlay.show(p);
   appCfg.brightness = p;
-  settingsStore.save(appCfg);
+  if (!settingsStore.saveBrightness(p)) logs::logE("[SYS] Failed to save brightness to NVS");
   needUpdateScreen = true;
 }
 
 #if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
 static AlarmState alarmState;
-static MissingDataAlarm missingDataAlarm;
+static SnoozeLan snoozeLan;
 static void tickAlarm();
 static void publishAlarm(uint32_t now);
+static uint64_t snoozeEpoch(uint32_t now);
+
+static void cycleAlarmSnooze() {
+  tickAlarm();
+  if (portal.active() || !alarmState.enabled()) return;
+  const uint32_t now = millis();
+  alarmState.cycle_snooze(now);
+  snoozeLan.announce(alarmState, snoozeEpoch(now), now);
+  publishAlarm(now);
+  logs::logIf("[SNOOZE] %u min", unsigned(alarmState.snooze_minutes()));
+}
 
 #endif
 
 #if defined(BOARD_M5CORE_S3)
 static void onTouchAction(ui_navigation::Action action) {
   switch (action) {
-    case ui_navigation::Action::CycleAlarmSnooze: {
-      tickAlarm();
-      const uint32_t now = millis();
-      alarmState.cycle_snooze(now);
-      publishAlarm(now);
+    case ui_navigation::Action::CycleAlarmSnooze:
+      cycleAlarmSnooze();
       break;
-    }
     case ui_navigation::Action::SwitchLeft:
     case ui_navigation::Action::SwitchRight:
       if (portal.active() || (currentScreen != ScreenId::SCREEN_MAIN
@@ -191,7 +205,7 @@ static void onTouchAction(ui_navigation::Action action) {
       currentScreen = currentScreen == ScreenId::SCREEN_MAIN
           ? ScreenId::SCREEN_CLOCK : ScreenId::SCREEN_MAIN;
       requestScreen(currentScreen, action == ui_navigation::Action::SwitchLeft
-          ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_MOVE_RIGHT, 220);
+          ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_MOVE_RIGHT, app_constants::screen_animation_ms);
       break;
     case ui_navigation::Action::ScrollUp:
       if (currentScreen == ScreenId::SCREEN_LOGS) ui_logs_scroll_page(+1);
@@ -227,21 +241,6 @@ static void tickCoreButton() {
 
 static bool g_bothHoldLatched = false;
 static uint32_t g_lastScrollMs = 0;
-static constexpr uint32_t SCROLL_PERIOD_MS = 90;
-
-static void cycleTDisplayAlarmSnooze() {
-  tickAlarm();
-  const uint32_t now = millis();
-  if (!alarmState.enabled()) {
-    logs::logW("[BUTTON] snooze ignored: both alarms disabled");
-    return;
-  }
-  alarmState.cycle_snooze(now);
-  publishAlarm(now);
-  logs::logIf("[BUTTON] snooze=%u min, remaining=%lu sec",
-      unsigned(alarmState.snooze_minutes()),
-      (unsigned long)alarmState.remaining_seconds(now));
-}
 
 // В журнале кнопки прокручивают записи; удержание обеих открывает журнал.
 static void tickButtons() {
@@ -270,7 +269,7 @@ static void tickButtons() {
   }
 
   if (currentScreen == ScreenId::SCREEN_LOGS) {
-    if (now - g_lastScrollMs < SCROLL_PERIOD_MS) return;
+    if (now - g_lastScrollMs < app_constants::log_scroll_ms) return;
     bool scrolled = false;
 
     if (uTick && btnUser.step()) { ui_logs_scroll(-1); scrolled = true; }
@@ -289,42 +288,35 @@ static void tickButtons() {
   if (uTick) {
 
     if (btnUser.click()) {
-      logs::logI("[BUTTON] GPIO14 click: snooze");
-      cycleTDisplayAlarmSnooze();
+      logs::logI("[BUTTON] GPIO14: cycle snooze");
+      cycleAlarmSnooze();
     }
-    if (btnUser.hold()) changeScreen();
+    if (btnUser.hold()) { changeScreen(); }
   }
 
   // GPIO0: короткое нажатие — яркость, удержание — настройки.
   if (bTick) {
 
     if (btnBoot.click()) {
-      logs::logI("[BUTTON] GPIO0 click: brightness");
+      logs::logI("[BUTTON] GPIO0: change brightness");
       changeBacklight();
     }
-    if (btnBoot.hold() && !portal.active()) enterSettings();
+    if (btnBoot.hold() && !portal.active()) { enterSettings(); }
   }
 }
 #endif
 
 static void initWifi() {
 #if defined(BOARD_M5CORE_S3)
-  wifiCfg.hostname = "m5cores3";
+  wifiCfg.hostname = app_constants::wifi_cores3_hostname;
 #else
-  wifiCfg.hostname = "t-display-s3";
+  wifiCfg.hostname = app_constants::wifi_tdisplay_hostname;
 #endif
-  wifiCfg.connectTimeoutMs = 20000;
-  wifiCfg.retryDelayMs = 500;
-  wifiCfg.enableAutoReconnect = true;
-
-  wifiCfg.beginAttempts = 3;
-  wifiCfg.reconnectPeriodMs = 3000;
-  wifiCfg.reconnectTryWindowMs = 8000;
 
   wifiMgr.setConfig(wifiCfg);
   wifiMgr.setLogger(&g_logs);
 
-  logs::logIf("[WIFI] begin hostname=%s", wifiCfg.hostname ? wifiCfg.hostname : "(null)");
+  logs::logIf("[Wi-Fi] Starting, hostname: %s", wifiCfg.hostname ? wifiCfg.hostname : "(none)");
 
   WifiCred list[MAX_WIFI];
   size_t cnt = 0;
@@ -338,7 +330,7 @@ static void initWifi() {
   }
 
   if (cnt == 0) {
-    logs::logE("[WIFI] no networks configured");
+    logs::logE("[Wi-Fi] No saved networks");
     bootWaitNsSecond = true;
     currentScreen = ScreenId::SCREEN_LOGS;
     needUpdateScreen = true;
@@ -348,7 +340,7 @@ static void initWifi() {
   wifiMgr.addNetworks(list, cnt);
 
   bool wifiOk = wifiMgr.begin();
-  logs::logIf("[WIFI] begin ok=%d", (int)wifiOk);
+  logs::logIf("[Wi-Fi] Connection start: %s", wifiOk ? "OK" : "failed");
 
   currentScreen = ScreenId::SCREEN_LOGS;
   needUpdateScreen = true;
@@ -358,14 +350,11 @@ static void initWifi() {
   applyTimeConfig(appCfg.tzMinutes, appCfg.dstEnable);
 
   NSConfig c;
+  c.batterySource = appCfg.batterySource;
   c.baseUrl       = String(appCfg.hostSite);
   c.token         = String(appCfg.nsToken);
-  c.httpTimeoutMs = 15000;
-  c.tlsInsecure   = true;
-  for (int i = 0; i < 4; ++i) c.sgvBounds[i] = appCfg.sgvBounds[i];
 
-  c.retryDelayMs = 1500;
-  c.warnRssiDbm  = -78;
+  for (int i = 0; i < 4; ++i) c.sgvBounds[i] = appCfg.sgvBounds[i];
 
   g_ns.begin(c);
 
@@ -388,13 +377,13 @@ static void tickNightscout() {
     const int32_t ageSec = computeAgeSec(data.update_time_ms);
     if (nightscout_poll::due(nowMs, g_ns.lastRequestAtMs(), data.update_time_ms > 0,
                             zone, ageSec)) {
-      logs::logIf("[SYS] %s age=%ds -> request update",
-                  nightscout_poll::warning_zone(zone) ? "yellow/red" : "stale", (int)ageSec);
+      logs::logIf("[SYS] %s, age=%d s: requesting data",
+                  nightscout_poll::warning_zone(zone) ? "Yellow/red zone" : "Stale data", (int)ageSec);
       g_ns.requestUpdate();
     }
   }
 
-  if (nowMs - lastTickMs >= UI_REFRESH_INTERVAL_MS) {
+  if (nowMs - lastTickMs >= app_constants::ui_refresh_ms) {
     lastTickMs = nowMs;
     if (currentScreen == ScreenId::SCREEN_MAIN || currentScreen == ScreenId::SCREEN_CLOCK) {
       needUpdateScreen = true;
@@ -410,11 +399,32 @@ static void tickNightscout() {
     }
   }
 
-  if (bootWaitNsSecond && nsChanged && nsData.ok) {
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+  nsAlarmSnapshot=g_ns.alarms();
+  portal.setNightscoutState(nsAlarmSnapshot);
+  const auto& imported=nsAlarmSnapshot.preferences;
+  if (nsAlarmSnapshot.connected && imported.loaded && imported.valid()
+      && strcmp(imported.origin,appCfg.hostSite)==0 && nsImportedRevision!=nsAlarmSnapshot.revision) {
+    nsImportedRevision=nsAlarmSnapshot.revision;
+    const auto next=ns_alarm::import_preferences(imported,appCfg.nsAlarms);
+    const bool changed=!appCfg.nsAlarms.loaded || appCfg.nsAlarms.enabledMask!=next.enabledMask
+        || appCfg.nsAlarms.overridden!=next.overridden
+        || memcmp(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds))!=0
+        || memcmp(appCfg.nsAlarms.counts,imported.counts,sizeof(imported.counts))!=0
+        || memcmp(appCfg.nsAlarms.minutes,imported.minutes,sizeof(imported.minutes))!=0;
+    appCfg.nsAlarms=next;
+    memcpy(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds));
+    if (changed && !portal.active() && !settingsStore.save(appCfg)) logs::logE("[NS ALARM] Failed to save settings to NVS");
+    if (changed) logs::logI("[NS ALARM] Thresholds and alarm settings loaded");
+    needUpdateScreen=true;
+  }
+#endif
+
+  if (bootWaitNsSecond && nsChanged && nsData.ok && !portal.active()) {
     bootWaitNsSecond = false;
     currentScreen = desiredUiScreen;
     needUpdateScreen = true;
-    logs::logI("[SYS] NS connected");
+    logs::logI("[SYS] Nightscout connected");
   }
 }
 
@@ -422,19 +432,19 @@ static void tickNightscout() {
 static void tickTimeResync() {
   if (WiFi.status() != WL_CONNECTED) return;
   time_t now = time(nullptr);
-  const bool valid = (now > 100000);
+  const bool valid = (now > app_constants::valid_epoch_seconds);
 
   if (valid && !g_ntpWasValid) {
     g_ntpWasValid = true;
-    logs::logI("[TIME] NTP synced");
+    logs::logI("[TIME] NTP synchronized");
     lastNtpSync = now;
   }
 
-  if (valid && lastNtpSync != 0 && (now - lastNtpSync) >= NTP_SYNC_PERIOD) {
+  if (valid && lastNtpSync != 0 && (now - lastNtpSync) >= static_cast<time_t>(app_constants::ntp_resync_seconds)) {
     logs::logI("[TIME] Daily NTP resync");
     applyTimeConfig(appCfg.tzMinutes, appCfg.dstEnable);
     time_t now2 = time(nullptr);
-    if (now2 > 100000) lastNtpSync = now2;
+    if (now2 > app_constants::valid_epoch_seconds) lastNtpSync = now2;
     else lastNtpSync = now;
   }
 }
@@ -442,18 +452,34 @@ static void tickTimeResync() {
 static void tickPortal() {
 
   portal.tick();
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+  AppSettings draft;
+  if (portal.takeConnectionRequest(draft)) {
+    appCfg=draft;
+    if (strcmp(appCfg.nsAlarms.origin,appCfg.hostSite)!=0) appCfg.nsAlarms=ns_alarm::Preferences{};
+    haveLastGood=false; nsData=NightscoutData{}; nsImportedRevision=0;
+    WifiCred networks[MAX_WIFI]; size_t count=0;
+    for (int i=0;i<MAX_WIFI;++i) if (appCfg.wifi[i].ssid[0]) networks[count++]={appCfg.wifi[i].ssid,appCfg.wifi[i].pass};
+    wifiMgr.setConfig(wifiCfg); wifiMgr.addNetworks(networks,count); wifiMgr.begin();
+    NSConfig config; config.baseUrl=appCfg.hostSite; config.token=appCfg.nsToken; config.batterySource=appCfg.batterySource;
+    memcpy(config.sgvBounds,appCfg.sgvBounds,sizeof(config.sgvBounds));
+    g_ns.begin(config); g_ns.requestUpdate();
+    logs::logI("[NS] Connection requested from web settings");
+  }
+  wifiMgr.tick();
+  tickNightscout();
+#endif
 
   static uint32_t lastKick = 0;
   uint32_t nowMs = millis();
-  if (nowMs - lastKick > 500) {
+  if (nowMs - lastKick > app_constants::portal_refresh_ms) {
     needUpdateScreen = true;
     lastKick = nowMs;
   }
 
   if (g_rebootRequested) {
     g_rebootRequested = false;
-    delay(150);
-    ESP.restart();
+    portal.scheduleRestart();
   }
 }
 
@@ -461,37 +487,39 @@ static void tickPortal() {
 #include "esp_err.h"
 
 static void initSettingsSafe() {
-  delay(1500);
-  logs::logI("[SYS] init settings");
+  logs::logI("[SYS] Loading settings");
 
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    logs::logW("[SYS] NVS reset");
+    logs::logW("[SYS] Resetting NVS");
     nvs_flash_erase();
     err = nvs_flash_init();
   }
 
   if (err != ESP_OK) {
-    logs::logEf("[SYS] NVS init error=%s", esp_err_to_name(err));
+    logs::logEf("[SYS] NVS initialization error: %s", esp_err_to_name(err));
   } else {
-    logs::logI("[SYS] NVS init OK");
+    logs::logI("[SYS] NVS ready");
   }
 
   bool ok = settingsStore.begin();
   if (!ok) {
-    logs::logW("[SYS] settings load failed -> defaults");
+    logs::logW("[SYS] Settings load failed: using defaults");
     appCfg = AppSettings();
     return;
   }
 
   settingsStore.load(appCfg);
-  logs::logI("[SYS] settings loaded");
-  Serial.printf("[HEAP] after settings load: %u\n", (unsigned)ESP.getFreeHeap());
+  logs::logI("[SYS] Settings loaded");
+  Serial.printf("[HEAP] Free after loading settings: %u bytes\n", (unsigned)ESP.getFreeHeap());
 }
 
 void setup() {
-
-  Serial.begin(115200);
+#if defined(BOARD_TDISPLAY_S3)
+  // Инициализируем GPIO-зуммер до запуска дисплея и сети.
+  buzzer::begin();
+#endif
+  Serial.begin(app_constants::serial_baud);
 
   gfx::LVGL_Display::instance().init();
 
@@ -499,7 +527,7 @@ void setup() {
   ui_logs_set_buffer(&g_logs);
 
   logs::bind(&g_logs, true);
-  logs::logI("[SYS] boot");
+  logs::logI("[SYS] Boot");
 
   g_scr_main  = ui_main_create();
   g_scr_clock = ui_clock_create();
@@ -508,10 +536,7 @@ void setup() {
   brOverlay.init(lv_layer_top());
 
   lv_screen_load(g_scr_logs);
-  for (int i = 0; i < 10; i++) {
-    gfx::LVGL_Display::instance().loop();
-    delay(5);
-  }
+  gfx::LVGL_Display::instance().loop();
 
   initSettingsSafe();
 
@@ -539,16 +564,17 @@ void setup() {
   currentScreen = ScreenId::SCREEN_LOGS;
   needUpdateScreen = true;
 
-  logs::logI("[WIFI] connecting");
+  logs::logI("[Wi-Fi] Connecting");
   initWifi();
 }
-
-static uint32_t last_ms = 0;
 
 // Неизвестное время или метка из будущего возвращают INT32_MAX.
 static int32_t computeAgeSec(uint64_t update_ms) {
   time_t nowSec = time(nullptr);
-  if (nowSec <= 100000 || update_ms == 0) return INT32_MAX;
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+  if (nowSec<=app_constants::valid_epoch_seconds) nowSec=ns_alarm::server_now(nsAlarmSnapshot,millis())/1000;
+#endif
+  if (nowSec <= app_constants::valid_epoch_seconds || update_ms == 0) return INT32_MAX;
   time_t sensTime = (time_t)(update_ms / 1000ULL);
   if (sensTime <= 0 || nowSec < sensTime) return INT32_MAX;
   return (int32_t)(nowSec - sensTime);
@@ -556,9 +582,18 @@ static int32_t computeAgeSec(uint64_t update_ms) {
 
 #if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
 
+static uint64_t snoozeEpoch(uint32_t now) {
+  const time_t epoch = time(nullptr);
+  if (epoch > app_constants::valid_epoch_seconds) return uint64_t(epoch);
+  return ns_alarm::server_now(nsAlarmSnapshot, now) / 1000;
+}
+
 // Реальная тревога управляет подсветкой; тест звука не изменяет отсрочку.
 static void publishAlarm(uint32_t now) {
-  backlight.setAlarmBoost(alarmState.should_sound(now));
+  const uint8_t severity=ns_alarm::level(nsAlarmKind);
+  const uint32_t remaining=alarmState.remaining_seconds(now);
+  const bool sounding=appCfg.soundAlarmEnabled && severity && !remaining;
+  backlight.setAlarmBoost(sounding);
   auto& display = gfx::Display::instance();
   static bool testing = false;
   static uint32_t testStarted = 0;
@@ -569,33 +604,43 @@ static void publishAlarm(uint32_t now) {
     testStarted = now;
   }
 
-  // После теста возвращается сохранённая громкость и обычное состояние тревоги.
-  if (testing && (!portal.active() || uint32_t(now - testStarted) >= 600)) {
+  // После теста возвращаются сохранённая громкость и обычное состояние тревоги.
+  if (testing && (!portal.active() || uint32_t(now - testStarted) >= app_constants::sound_test_ms)) {
     display.set_alarm_sound(false);
     testing = false;
   }
   display.set_alarm_volume(testing ? testVolume : appCfg.alarmVolume);
-  display.set_alarm_sound(testing || alarmState.should_sound(now));
-  ui_navigation::set_alarm_status(alarmState.enabled(), alarmState.data_valid(),
-      alarmState.should_sound(now), display.alarm_sound_available(),
-      alarmState.remaining_seconds(now), alarmState.snooze_minutes(), alarmState.data_missing());
+#if defined(BOARD_TDISPLAY_S3)
+  buzzer::setAlarm(testing || sounding, !testing && severity==2);
+#else
+  display.set_alarm_sound(testing || sounding);
+#endif
+  const auto& data=haveLastGood?lastGood:nsData;
+  const int32_t age=computeAgeSec(data.update_time_ms);
+  ui_navigation::set_alarm_status(appCfg.soundAlarmEnabled,
+      data.ok && age>=0 && age<ns_alarm::max_age_seconds, sounding, display.alarm_sound_available(),
+      remaining, alarmState.snooze_minutes(), false, severity==2);
   static bool audioErrorLogged = false;
-  if (alarmState.enabled() && !display.alarm_sound_available() && !audioErrorLogged) {
-    logs::logE("[ALARM] speaker unavailable");
+  if (appCfg.soundAlarmEnabled && !display.alarm_sound_available() && !audioErrorLogged) {
+    logs::logE("[ALARM] Audio device unavailable");
     audioErrorLogged = true;
   }
 }
 
-// Одна настройка включает красную зону и отсутствие свежих данных 15 минут.
+// Обе платы используют серверные пороги и флаги тревог по данным моложе 10 минут.
 static void tickAlarm() {
   const auto& data = haveLastGood ? lastGood : nsData;
   const int32_t age = computeAgeSec(data.update_time_ms);
-  const GlucoseZone zone = glucose_zone(data.sgv_mmol, appCfg.sgvBounds);
-  const bool valid = data.ok && age >= 0 && age < 15 * 60 && zone != GlucoseZone::Invalid;
+  const auto previous=nsAlarmKind;
+  nsAlarmKind=data.ok && appCfg.nsAlarms.loaded && strcmp(appCfg.nsAlarms.origin,appCfg.hostSite)==0
+      ? ns_alarm::classify(data.sgv_mmol,age,appCfg.sgvBounds,appCfg.nsAlarms.enabledMask) : ns_alarm::Kind::None;
+  static const char* const names[]={"none", "critical low", "low", "high", "critical high"};
+  if (nsAlarmKind!=previous) logs::logIf("[NS ALARM] %s; glucose=%.1f, age=%ld s",
+      names[unsigned(nsAlarmKind)],data.sgv_mmol,(long)age);
   const uint32_t now = millis();
-  const bool missing = missingDataAlarm.update(now, data.ok ? age : INT32_MAX);
-  alarmState.update(now, appCfg.soundAlarmEnabled, valid, glucose_zone_is_red(zone),
-                    appCfg.soundAlarmEnabled, missing);
+  alarmState.update(now, appCfg.soundAlarmEnabled, data.ok && age >= 0 && age < ns_alarm::max_age_seconds,
+                    nsAlarmKind != ns_alarm::Kind::None);
+  snoozeLan.tick(alarmState, appCfg.hostSite, snoozeEpoch(now), now);
   publishAlarm(now);
 }
 #endif
@@ -630,7 +675,7 @@ void loop() {
     tickAlarm();
 #endif
     gfx::LVGL_Display::instance().loop();
-    delay(1);
+    vTaskDelay(1); // Отдаём процессор задачам сети и idle; время LVGL задаёт его tick callback.
     return;
   }
 
@@ -652,18 +697,19 @@ void loop() {
     }
 
     NightscoutData uiData = haveLastGood ? lastGood : nsData;
+    memcpy(uiData.sgvBounds,appCfg.sgvBounds,sizeof(uiData.sgvBounds));
 
     const int32_t ageSec = computeAgeSec(uiData.update_time_ms);
     uiData.ageSec  = ageSec;
-    uiData.stale5  = (ageSec != INT32_MAX && ageSec >= 5 * 60);
-    uiData.stale15 = (ageSec != INT32_MAX && ageSec >= 15 * 60);
+    uiData.stale5  = (ageSec != INT32_MAX && ageSec >= app_constants::fresh_age_minutes * 60);
+    uiData.stale15 = (ageSec != INT32_MAX && ageSec >= app_constants::data_expiry_seconds);
 
     if (uiData.stale15) {
       uiData.sgv_mmol = NAN;
       uiData.delta_mmol = NAN;
       uiData.iob = NAN;
       uiData.cob = NAN;
-      uiData.uploaderBatPct = -1;
+      uiData.batteryPct = -1;
       uiData.pumpBatV = 0.0f;
       strlcpy(uiData.trend, "N/A", sizeof(uiData.trend));
     }
@@ -685,13 +731,6 @@ void loop() {
 
   tickTimeResync();
 
-  uint32_t now = millis();
-  uint32_t diff = now - last_ms;
-  if (diff) {
-    last_ms = now;
-    lv_tick_inc(diff);
-  }
-
   gfx::LVGL_Display::instance().loop();
-  delay(1);
+  vTaskDelay(1);
 }
