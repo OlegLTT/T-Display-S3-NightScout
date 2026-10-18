@@ -409,19 +409,16 @@ static void tickNightscout() {
 
 #if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
   nsAlarmSnapshot=g_ns.thresholds();
-  portal.setNightscoutState(nsAlarmSnapshot);
   if (ns_alarm::server_bounds_ready(nsAlarmSnapshot,appCfg.hostSite)
       && nsImportedRevision!=nsAlarmSnapshot.revision) {
     nsImportedRevision=nsAlarmSnapshot.revision;
-    const bool changed=!appCfg.boundsOverridden
-        && (memcmp(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds))!=0
-            || strcmp(appCfg.boundsOrigin,nsAlarmSnapshot.origin)!=0);
-    if (!appCfg.boundsOverridden) {
-      memcpy(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds));
-      strlcpy(appCfg.boundsOrigin,nsAlarmSnapshot.origin,sizeof(appCfg.boundsOrigin));
-    }
-    if (changed && !portal.active() && !settingsStore.saveBounds(appCfg)) logs::logE("[NS ALARM] Failed to save thresholds to NVS");
-    if (changed) logs::logI("[NS ALARM] Glucose thresholds updated");
+    const bool changed=memcmp(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds))!=0
+        || strcmp(appCfg.boundsOrigin,nsAlarmSnapshot.origin)!=0;
+    memcpy(appCfg.sgvBounds,nsAlarmSnapshot.bounds,sizeof(appCfg.sgvBounds));
+    strlcpy(appCfg.boundsOrigin,nsAlarmSnapshot.origin,sizeof(appCfg.boundsOrigin));
+    if (changed && !settingsStore.saveBounds(appCfg)) logs::logE("[NS ALARM] Failed to save thresholds to NVS");
+    if (changed) logs::logIf("[NS ALARM] Server thresholds: %.1f / %.1f / %.1f / %.1f mmol/L",
+        appCfg.sgvBounds[0],appCfg.sgvBounds[1],appCfg.sgvBounds[2],appCfg.sgvBounds[3]);
     needUpdateScreen=true;
   }
 #endif
@@ -459,22 +456,6 @@ static void tickPortal() {
 
   portal.tick();
 #if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
-  AppSettings draft;
-  if (portal.takeConnectionRequest(draft)) {
-    if (strcmp(draft.hostSite,appCfg.hostSite)!=0) {
-      draft.boundsOverridden=false;
-      draft.boundsOrigin[0]=0;
-    }
-    appCfg=draft;
-    haveLastGood=false; nsData=NightscoutData{}; nsImportedRevision=0;
-    WifiCred networks[MAX_WIFI]; size_t count=0;
-    for (int i=0;i<MAX_WIFI;++i) if (appCfg.wifi[i].ssid[0]) networks[count++]={appCfg.wifi[i].ssid,appCfg.wifi[i].pass};
-    wifiMgr.setConfig(wifiCfg); wifiMgr.addNetworks(networks,count); wifiMgr.begin();
-    NSConfig config; config.baseUrl=appCfg.hostSite; config.token=appCfg.nsToken; config.batterySource=appCfg.batterySource;
-    memcpy(config.sgvBounds,appCfg.sgvBounds,sizeof(config.sgvBounds));
-    g_ns.begin(config); g_ns.requestUpdate();
-    logs::logI("[NS] Connection requested from web settings");
-  }
   wifiMgr.tick();
   tickNightscout();
 #endif

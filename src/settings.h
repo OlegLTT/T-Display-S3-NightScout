@@ -20,9 +20,8 @@ struct AppSettings {
   int16_t tzMinutes = app_constants::default_timezone_minutes;
   bool    dstEnable = app_constants::default_dst;
 
-  // Четыре возрастающие границы глюкозы в ммоль/л.
-  float sgvBounds[4] = {app_constants::default_glucose_bounds[0], app_constants::default_glucose_bounds[1], app_constants::default_glucose_bounds[2], app_constants::default_glucose_bounds[3]};
-  bool boundsOverridden = false; // Ручные пороги сохраняются вместо фонового импорта.
+  // Только серверные границы в ммоль/л; до первого импорта пороги неизвестны.
+  float sgvBounds[4] = {NAN, NAN, NAN, NAN};
   char boundsOrigin[96] = {}; // Сервер, к которому относятся сохранённые пороги.
 
   char hostSite[96] = {0};
@@ -34,8 +33,13 @@ struct AppSettings {
   uint8_t alarmVolume = app_constants::default_volume_percent;
   BatterySource batterySource = app_constants::default_battery_source;
 
-  bool isValidBounds() const {
-    return valid_glucose_bounds(sgvBounds);
+  bool hasServerBounds() const {
+    return ns_alarm::cached_bounds_ready(sgvBounds,boundsOrigin,hostSite);
+  }
+
+  void clearBounds() {
+    for (float& bound : sgvBounds) bound = NAN;
+    boundsOrigin[0] = 0;
   }
 
   uint8_t lastUiScreen = 0;

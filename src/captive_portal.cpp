@@ -16,8 +16,6 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Настройка</title>
 <style>
-  :root { --red:#d32f2f; --yellow:#ffff00; --green:#2e7d32; }
-
   body{
     margin:0;
     font-family:system-ui,Arial,sans-serif;
@@ -131,42 +129,6 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   .row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   @media(max-width:820px){ .row2{ grid-template-columns:1fr; } }
 
-  /* Цветовая шкала порогов глюкозы. */
-  .band {
-    width: 100%;
-    padding: 40px 0;
-    display: flex;
-    justify-content: center;
-    background: var(--red);
-    transition: background 0.15s linear;
-    border-radius:14px;
-    overflow:hidden;
-  }
-  .boundsRow {
-    display: flex;
-    gap: 14px;
-    padding: 16px 20px;
-    border-radius: 14px;
-    background: rgba(255,255,255,0.25);
-    backdrop-filter: blur(6px);
-    width: 100%;
-    box-sizing: border-box;
-  }
-  input.num {
-    width: 80px;
-    min-width: 0;
-    flex: 1 1 80px;
-    height: 56px;
-    font-size: 22px;
-    text-align: center;
-    border-radius: 12px;
-    border: 2px solid rgba(0,0,0,0.4);
-    outline: none;
-    background: rgba(255,255,255,0.95);
-    padding:0;
-  }
-  @media(max-width:480px){ .boundsRow{ gap:8px; padding:16px 8px; } }
-
   .linkBtn{
     border:none;
     background:none;
@@ -204,7 +166,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <body>
 <div class="wrap">
   <div class="title">Настройки устройства</div>
-  <div class="muted">Настройки сохраняются на этом устройстве. Из Nightscout обновляются только пороги глюкозы.</div>
+  <div class="muted">Настройки сохраняются на этом устройстве. Пороги глюкозы автоматически считываются из Nightscout при запуске.</div>
 
   <div class="card">
     <div style="font-size:16px; font-weight:650; margin-bottom:6px;">
@@ -290,27 +252,6 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     </div>
   </div>
 
-  <div class="card" id="nsConnectCard" style="display:none">
-    <button class="btn" id="connectNsBtn" type="button">Обновить пороги из Nightscout</button>
-    <div class="muted" id="nsConnectStatus" role="status">Укажите сервер, токен и домашний Wi-Fi выше.</div>
-  </div>
-  <div class="card" id="boundsCard">
-    <div style="font-size:16px; font-weight:650;">Пороги глюкозы (ммоль/л)</div>
-
-    <div class="band" id="band" style="margin-top:10px;">
-      <div class="boundsRow">
-        <input class="num" id="b0" type="text" inputmode="decimal" autocomplete="off" aria-label="Нижняя красная граница" placeholder="0.0">
-        <input class="num" id="b1" type="text" inputmode="decimal" autocomplete="off" aria-label="Нижняя жёлтая граница" placeholder="0.0">
-        <input class="num" id="b2" type="text" inputmode="decimal" autocomplete="off" aria-label="Верхняя жёлтая граница" placeholder="0.0">
-        <input class="num" id="b3" type="text" inputmode="decimal" autocomplete="off" aria-label="Верхняя красная граница" placeholder="0.0">
-      </div>
-    </div>
-
-    <div class="muted">Должно быть строго: b0 &lt; b1 &lt; b2 &lt; b3</div>
-    <div class="muted" id="nsBoundsNotice" style="display:none"></div>
-    <button class="linkBtn" id="serverBoundsBtn" type="button" style="display:none">Использовать пороги Nightscout</button>
-  </div>
-
   <div class="card" id="alarmCard" style="display:none">
     <label for="alarmVolume">Громкость: <span id="alarmVolumeValue">—</span></label>
     <input type="range" id="alarmVolume" min="0" max="100" step="1" value="0">
@@ -358,105 +299,8 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     alarmVolumeValue.textContent = alarmVolume.value + '%';
   });
   let soundAlarmSupported = false;
-  let nsBoundsDevice = false;
-  let nsBoundsReady = false;
-  let boundsDirty = false;
-  let boundsOverridden = false;
-  let serverBounds = [];
-  let cfgLoaded = false;
-  let localHost = '';
-  let nsLoadEpoch = 0;
-
-  function resetNsLoad() {
-    ++nsLoadEpoch;
-    nsBoundsReady=false;
-    serverBounds=[];
-    updateBoundsNotice();
-  }
-
-  function updateBoundsNotice() {
-    document.getElementById('nsBoundsNotice').textContent = boundsOverridden
-        ? 'Ручные пороги сохраняются только на этом устройстве и не меняют Nightscout или другие устройства.'
-        : 'Пороги обновляются из Nightscout. Редактирование сохраняет ручные значения только на этом устройстве.';
-    document.getElementById('serverBoundsBtn').style.display = nsBoundsDevice && boundsOverridden ? '' : 'none';
-  }
-
-  function showNsState(j) {
-    nsBoundsDevice = !!j.nsBoundsDevice;
-    const sameConnection = j.host === sanitizeHost(document.getElementById('host').value)
-        && j.token === document.getElementById('token').value.trim();
-    nsBoundsReady = sameConnection && !!j.nsBoundsReady && j.nsOrigin === j.host;
-    serverBounds = nsBoundsReady ? j.serverBounds : [];
-    document.getElementById('nsConnectCard').style.display = nsBoundsDevice ? '' : 'none';
-    document.getElementById('alarmCard').style.display = soundAlarmSupported ? '' : 'none';
-    document.getElementById('nsBoundsNotice').style.display = nsBoundsDevice ? '' : 'none';
-    document.getElementById('nsConnectStatus').textContent = nsBoundsReady
-        ? 'Пороги Nightscout получены.'
-        : 'Локальные настройки доступны без сервера. Пороги обновятся при подключении к Nightscout.';
-    if (sameConnection && (!boundsDirty || (!boundsOverridden && nsBoundsReady))
-        && !boundsInputs.includes(document.activeElement)) {
-      if (!boundsDirty) boundsOverridden=!!j.boundsOverride;
-      const values=boundsDirty ? serverBounds : j.bounds;
-      values.forEach((value,i)=>document.getElementById('b'+i).value=Number(value).toFixed(1));
-      updateGradient();
-    }
-    updateBoundsNotice();
-  }
-  document.getElementById('serverBoundsBtn').addEventListener('click',()=>{
-    boundsDirty=true;
-    boundsOverridden=false;
-    if (nsBoundsReady) serverBounds.forEach((value,i)=>document.getElementById('b'+i).value=Number(value).toFixed(1));
-    updateBoundsNotice();
-  });
-  document.getElementById('connectNsBtn').addEventListener('click',async()=>{
-    const status=document.getElementById('nsConnectStatus');
-    resetNsLoad();
-    const epoch=nsLoadEpoch;
-    try {
-      const form=new URLSearchParams({host:sanitizeHost(hostInp.value),token:tokenInp.value.trim()});
-      slots.forEach((slot,i)=>{
-        form.set('ssid'+i,(slot.ssid||'').trim());
-        form.set('passChanged'+i,slot.passDirty?'1':'0');
-        form.set('pass'+i,slot.passDirty?(slot.pass||''):'');
-      });
-      const response=await fetch('/connect_ns',{method:'POST',body:form});
-      if (epoch!==nsLoadEpoch) return;
-      if (!response.ok) throw new Error(await response.text());
-      status.textContent='Подключение к серверу…';
-    } catch(error) { if (epoch===nsLoadEpoch) status.textContent=error.message; }
-  });
-  setInterval(async()=>{
-    if (!nsBoundsDevice || !cfgLoaded) return;
-    const epoch=nsLoadEpoch;
-    try {
-      const response=await fetch('/cfg',{cache:'no-store'});
-      if (epoch!==nsLoadEpoch) return;
-      if (response.ok) {
-        const state=await response.json();
-        if (epoch===nsLoadEpoch) showNsState(state);
-      }
-    } catch(error) {
-      if (epoch===nsLoadEpoch) document.getElementById('nsConnectStatus').textContent='Нет связи с устройством';
-    }
-  },2000);
-
-  const band = document.getElementById('band');
-  const boundsInputs = [b0,b1,b2,b3];
-
   const hostInp = document.getElementById('host');
   const tokenInp = document.getElementById('token');
-  for (const input of [hostInp,tokenInp]) input.addEventListener('input',()=>{
-    if (!nsBoundsDevice) return;
-    resetNsLoad();
-    if (input===hostInp && sanitizeHost(hostInp.value)!==localHost) {
-      boundsOverridden=false;
-      boundsDirty=true;
-      updateBoundsNotice();
-    }
-    document.getElementById('nsConnectStatus').textContent='Настройки подключения изменены. Сохраните их или нажмите «Обновить пороги».';
-  });
-
-
   // Сеть хранит SSID, пароль, признаки сохранённого и изменённого пароля, а также идентификатор.
   let slots = []; // Число строк приходит из настроек прошивки вместе с данными сетей.
 
@@ -472,61 +316,6 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   }
   hostInp.addEventListener('blur', ()=>{ hostInp.value = sanitizeHost(hostInp.value); });
   hostInp.addEventListener('paste', ()=>{ setTimeout(()=>{ hostInp.value = sanitizeHost(hostInp.value); }, 0); });
-
-  // Отображение границ и цветовой шкалы глюкозы.
-  function normalizeFloat1(el) {
-    let v = el.value.replace(',', '.').replace(/[^0-9.]/g,'');
-    const parts = v.split('.');
-    if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('');
-    if (v.includes('.')) {
-      const [a,b] = v.split('.');
-      v = a + '.' + b.slice(0,1);
-    }
-    el.value = v;
-  }
-  boundsInputs.forEach(i=>{
-    i.addEventListener('input', ()=>{
-      normalizeFloat1(i);
-      boundsDirty=true;
-      boundsOverridden=true;
-      updateBoundsNotice();
-    });
-    i.addEventListener('paste', ()=>setTimeout(()=>normalizeFloat1(i),0));
-  });
-
-  function updateGradient(){
-    const bandRect = band.getBoundingClientRect();
-    const bandLeft = bandRect.left;
-    const bandW    = bandRect.width;
-
-    const centers = boundsInputs.map(el=>{
-      const r = el.getBoundingClientRect();
-      return r.left + r.width/2;
-    });
-
-    const p = centers.map(x => ((x - bandLeft) / bandW * 100).toFixed(2));
-
-    band.style.background = `
-      linear-gradient(90deg,
-        var(--red) 0%,
-        var(--red) ${p[0]}%,
-        var(--yellow) ${p[0]}%,
-        var(--yellow) ${p[1]}%,
-        var(--green) ${p[1]}%,
-        var(--green) ${p[2]}%,
-        var(--yellow) ${p[2]}%,
-        var(--yellow) ${p[3]}%,
-        var(--red) ${p[3]}%,
-        var(--red) 100%
-      )`;
-  }
-
-  function validateBounds(nums){
-    for(let i=1;i<nums.length;i++){
-      if(!(nums[i]>nums[i-1])) return false;
-    }
-    return true;
-  }
 
   // Выбор часового пояса и собственного смещения UTC.
   function fmtTzLabel(mins){
@@ -704,19 +493,15 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   function renderAllSlots(){
     slotsEl.innerHTML = "";
     slots.forEach((_,i)=> slotsEl.appendChild(renderSlot(i)));
-    updateGradient();
   }
 
   // Загрузка текущих параметров устройства в форму.
   async function loadCfg(){
-    const epoch=nsLoadEpoch;
     const r = await fetch('/cfg', {cache:'no-store'});
     if (!r.ok) throw new Error('Не удалось загрузить настройки');
     const j = await r.json();
-    if (epoch!==nsLoadEpoch) return;
 
     hostInp.value = sanitizeHost(j.host || "");
-    localHost=hostInp.value;
     tokenInp.value = (j.token || "");
 
     slots = (j.wifi || []).map((w,idx)=>({
@@ -753,27 +538,12 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
       tzM.value = String(a%60);
     }
 
-    boundsOverridden=!!j.boundsOverride;
-    boundsDirty=false;
-    if(Array.isArray(j.bounds) && j.bounds.length===4){
-      j.bounds.forEach((v,i)=>boundsInputs[i].value = Number(v).toFixed(1));
-    }
-    updateGradient();
-    showNsState(j);
-    cfgLoaded=true;
   }
 
   // Отправка настроек и выход из портала.
   async function saveOnly(){
     msgEl.textContent='';
     msgEl.className='msg';
-
-    const nums = boundsInputs.map((el,idx)=>{
-      const v = el.value.trim().replace(',', '.');
-      if(!/^\d+(\.\d)?$/.test(v)) throw new Error(`Граница ${idx+1}: число с 1 десятичным знаком`);
-      return parseFloat(v);
-    });
-    if(!validateBounds(nums)) throw new Error('Границы должны строго возрастать');
 
     const form = new URLSearchParams();
     for(let i=0;i<slots.length;i++){
@@ -801,11 +571,6 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     form.set('dst', dst.value === '1' ? '1' : '0');
     form.set('batterySource', document.getElementById('batterySource').value);
     if (soundAlarmSupported) form.set('alarmVolume', alarmVolume.value);
-    if (nsBoundsDevice) {
-      form.set('boundsOverride',boundsOverridden?'1':'0');
-    }
-    nums.forEach((v,i)=>form.set('b'+i, v.toFixed(1)));
-
     // Перед отправкой убираем из адреса лишние части URL.
     const hostClean = sanitizeHost(hostInp.value || '');
     hostInp.value = hostClean;
@@ -834,7 +599,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     if (factoryBtn) {
       factoryBtn.addEventListener('click', () => {
         const ok = confirm(
-          'Сбросить ВСЕ настройки устройства (Wi-Fi, Nightscout, границы, часовой пояс)?\n\n' +
+          'Сбросить ВСЕ настройки устройства (Wi-Fi, Nightscout, часовой пояс)?\n\n' +
           'Устройство выполнит фабричный сброс и перезагрузится.'
         );
         if (!ok) return;
@@ -881,15 +646,11 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   });
 
   // Начальное заполнение формы после загрузки страницы.
-  window.addEventListener('resize', updateGradient);
-  window.addEventListener('scroll', updateGradient, {passive:true});
-
   window.addEventListener('load', async ()=>{
     try {
       buildTzList();
       setCustomEnabled(false);
       await loadCfg();
-      requestAnimationFrame(()=>requestAnimationFrame(updateGradient));
     } catch (error) {
       msgEl.textContent = 'Ошибка загрузки настроек. Обновите страницу. ' + error.message;
       msgEl.className = 'msg err';
@@ -956,15 +717,6 @@ void CaptivePortal::logI(const String& s) {
 void CaptivePortal::logE(const String& s) {
   Serial.println(s);
   if (_logs) _logs->add(LogLevel::Error, s);
-}
-
-static bool parseBound(const String& s, float& result) {
-  String v = s;
-  v.trim();
-  v.replace(',', '.');
-  char* end = nullptr;
-  result = strtof(v.c_str(), &end);
-  return end != v.c_str() && *end == '\0' && std::isfinite(result) && result >= 0;
 }
 
 static void sanitizeHostInPlace(String& h) {
@@ -1101,22 +853,6 @@ bool CaptivePortal::begin(LogBuffer* logs, SettingsStore* store, AppSettings* se
     handleSave();
   });
 
-  _srv.on("/connect_ns", HTTP_POST, [this, noCache] {
-    noCache();
-    AppSettings draft = *_settings;
-    if (!readConnectionForm(draft) || !draft.hostSite[0]) {
-      _srv.send(400,"text/plain; charset=utf-8","Проверьте адрес сервера и данные Wi-Fi"); return;
-    }
-    bool haveNetwork=false;
-    for (unsigned i=0;i<MAX_WIFI;++i) haveNetwork |= draft.wifi[i].ssid[0]!=0;
-    if (!haveNetwork && WiFi.status()!=WL_CONNECTED) {
-      _srv.send(400,"text/plain; charset=utf-8","Укажите домашнюю сеть Wi-Fi"); return;
-    }
-    _nsState=ns_alarm::Snapshot{};
-    _connectionDraft=draft; _connectionPending=true;
-    _srv.send(202,"text/plain","Connecting");
-  });
-
   _srv.on("/exit", HTTP_POST, [this, logReq, noCache] {
     logReq();
     noCache();
@@ -1237,16 +973,6 @@ void CaptivePortal::handleCfg() {
   j += "\"tzMin\":" + String(_settings->tzMinutes) + ",";
   j += "\"dst\":" + String(_settings->dstEnable ? "true" : "false") + ",";
   j += "\"alarmVolume\":" + String(_settings->alarmVolume) + ",";
-  j += "\"boundsOverride\":" + String(_settings->boundsOverridden ? "true" : "false") + ",";
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
-  j += "\"nsBoundsDevice\":true,";
-#else
-  j += "\"nsBoundsDevice\":false,";
-#endif
-  const bool nsReady=ns_alarm::server_bounds_ready(_nsState,_settings->hostSite);
-  j += "\"nsBoundsReady\":" + String(nsReady?"true":"false") + ",";
-  j += "\"nsOrigin\":\"" + escJson(_nsState.origin) + "\",";
-  j += "\"nsMessage\":\"" + escJson(_nsState.message) + "\",";
   j += "\"batterySource\":" + String(static_cast<uint8_t>(_settings->batterySource)) + ",";
   j += "\"expiryMinutes\":" + String(app_constants::data_expiry_seconds / 60) + ",";
   j += "\"snoozeMinutes\":[";
@@ -1254,19 +980,12 @@ void CaptivePortal::handleCfg() {
     if (step > 1) j += ",";
     j += String(step * app_constants::snooze_step_minutes);
   }
-  j += "],";
+  j += "]";
 #if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
-  j += "\"soundAlarmSupported\":true,";
+  j += ",\"soundAlarmSupported\":true";
 #else
-  j += "\"soundAlarmSupported\":false,";
+  j += ",\"soundAlarmSupported\":false";
 #endif
-  j += "\"bounds\":[";
-  const float* bounds=_settings->sgvBounds;
-  for (unsigned i=0;i<4;++i) { if (i) j+=','; j+=String(bounds[i],1); }
-  j += ']';
-  j += ",\"serverBounds\":[";
-  if (nsReady) for (unsigned i=0;i<4;++i) { if (i) j+=','; j+=String(_nsState.bounds[i],1); }
-  j += ']';
   j += "}";
 
   _srv.send(200, "application/json; charset=utf-8", j);
@@ -1297,6 +1016,13 @@ void CaptivePortal::handleSave() {
   if (!_settings || !_store) {
     logE("[HTTP] /save: settings storage unavailable");
     _srv.send(500, "text/plain; charset=utf-8", "no store/settings");
+    return;
+  }
+
+  bool manualBounds=_srv.hasArg("boundsOverride");
+  for (unsigned i=0;i<4;++i) manualBounds |= _srv.hasArg("b"+String(i));
+  if (manualBounds) {
+    _srv.send(400,"text/plain; charset=utf-8","Пороги задаются только в Nightscout. Обновите страницу настроек.");
     return;
   }
 
@@ -1331,39 +1057,7 @@ void CaptivePortal::handleSave() {
   }
 #endif
 
-  if (strcmp(s.hostSite,_settings->hostSite)!=0) {
-    s.boundsOverridden=false;
-    s.boundsOrigin[0]=0;
-  }
-
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
-  const bool nsReady=ns_alarm::server_bounds_ready(_nsState,s.hostSite)
-      && strcmp(s.nsToken,_settings->nsToken)==0;
-#endif
-
-  bool hasBounds=_srv.hasArg("boundsOverride");
-  for (unsigned i=0;i<4;++i) hasBounds |= _srv.hasArg("b"+String(i));
-  if (hasBounds) {
-    for (unsigned i=0;i<4;++i) {
-      if (!_srv.hasArg("b"+String(i)) || !parseBound(_srv.arg("b"+String(i)),s.sgvBounds[i])) {
-        _srv.send(400,"text/plain; charset=utf-8","Укажите четыре числовые границы."); return;
-      }
-    }
-    if (!s.isValidBounds()) {
-      _srv.send(400,"text/plain; charset=utf-8","Границы должны строго возрастать."); return;
-    }
-    const String overrideValue=_srv.hasArg("boundsOverride") ? _srv.arg("boundsOverride") : "1";
-    if (overrideValue!="0" && overrideValue!="1") {
-      _srv.send(400,"text/plain","Invalid boundsOverride"); return;
-    }
-    s.boundsOverridden=overrideValue=="1";
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
-    if (!s.boundsOverridden) {
-      if (nsReady) memcpy(s.sgvBounds,_nsState.bounds,sizeof(s.sgvBounds));
-    }
-#endif
-    strlcpy(s.boundsOrigin,s.hostSite,sizeof(s.boundsOrigin));
-  }
+  if (!s.hasServerBounds()) s.clearBounds();
 
   s.onboardingDone = true;
 

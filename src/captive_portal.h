@@ -17,21 +17,12 @@ public:
 
   void tick();
   void scheduleRestart() { _restartPending = true; _restartAt = millis(); }
-  void setNightscoutState(const ns_alarm::Snapshot& state) { _nsState = state; }
-  bool takeConnectionRequest(AppSettings& settings) {
-    if (!_connectionPending) return false;
-    settings = _connectionDraft; _connectionPending = false; return true;
-  }
-
   const String& apSsid() const { return _apSsid; }
   const String& apPass() const { return _apPass; }
   IPAddress apIP() const { return _apIP; }
 
 private:
   bool _active = false;
-  ns_alarm::Snapshot _nsState;
-  AppSettings _connectionDraft;
-  bool _connectionPending = false;
   bool _restartPending = false;
   uint32_t _restartAt = 0;
 

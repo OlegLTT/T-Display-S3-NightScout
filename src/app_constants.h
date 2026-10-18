@@ -40,8 +40,7 @@ constexpr size_t http_read_chunk_bytes = 512; // Порция чтения за 
 constexpr size_t http_body_max_bytes = 32 * 1024; // Максимум JSON; превышение завершает запрос ошибкой.
 constexpr size_t http_header_max_bytes = 1024; // Максимальная длина одной строки заголовка.
 
-// Заводские настройки пользователя. Границы строго возрастают, единицы — ммоль/л.
-constexpr float default_glucose_bounds[] = {3.9f, 4.5f, 8.5f, 10.0f};
+// Заводские локальные настройки. Пороги глюкозы загружаются только из Nightscout.
 constexpr int16_t default_timezone_minutes = 0; // UTC; восточные смещения положительны.
 constexpr bool default_dst = false;
 constexpr uint8_t default_volume_percent = 31; // 0 — тишина, 100 — максимум.
@@ -149,7 +148,4 @@ static_assert(wifi_slots > 0 && wifi_slots <= wifi_credential_capacity, "Too man
 static_assert(portal_password_length >= 8 && portal_password_length <= 63, "Invalid AP password length");
 static_assert(data_expiry_seconds > fresh_age_minutes * 60 && data_expiry_seconds % 60 == 0,
     "Data expiry must be in whole minutes and exceed fresh age");
-static_assert(default_glucose_bounds[0] > 0 && default_glucose_bounds[0] < default_glucose_bounds[1]
-    && default_glucose_bounds[1] < default_glucose_bounds[2]
-    && default_glucose_bounds[2] < default_glucose_bounds[3], "Invalid default glucose bounds");
 } // namespace app_constants

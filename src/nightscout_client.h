@@ -21,7 +21,7 @@ struct NSConfig {
   uint32_t hostErrorBackoffMs = app_constants::host_error_backoff_ms;
   bool     tlsInsecure = app_constants::tls_insecure;
 
-  float    sgvBounds[4] = {app_constants::default_glucose_bounds[0], app_constants::default_glucose_bounds[1], app_constants::default_glucose_bounds[2], app_constants::default_glucose_bounds[3]};
+  float    sgvBounds[4] = {NAN, NAN, NAN, NAN};
 
   uint32_t retryDelayMs = app_constants::ns_retry_delay_ms;
 
@@ -50,7 +50,7 @@ struct NightscoutData {
   int      batteryPct = -1;
   float    pumpBatV   = 0.0f;
 
-  float    sgvBounds[4] = {app_constants::default_glucose_bounds[0], app_constants::default_glucose_bounds[1], app_constants::default_glucose_bounds[2], app_constants::default_glucose_bounds[3]};
+  float    sgvBounds[4] = {NAN, NAN, NAN, NAN};
 
   // Возраст вычисляется перед отрисовкой; INT32_MAX означает неизвестное время.
   int32_t  ageSec = INT32_MAX;

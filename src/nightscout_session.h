@@ -28,6 +28,7 @@ private:
     bool _configure = false, _update = false, _busy = false, _wanted = false;
     uint32_t _lastRequest = 0;
     uint32_t _lastStatus = 0;
+    bool _statusAttempted = false;
     static void run(void* self);
     void work();
     int http(const String& path, String& response);

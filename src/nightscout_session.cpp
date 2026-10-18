@@ -7,8 +7,6 @@
 
 using su::SH;
 namespace {
-constexpr uint32_t statusPollMs = 300000;
-
 String encode(const String& input) {
     const char hex[] = "0123456789ABCDEF";
     String out;
@@ -195,19 +193,21 @@ void NightscoutSession::work() {
         }
         _update=false;
         xSemaphoreGive(_mutex);
-        if (configure) { _client.begin(_config); _lastStatus=0; }
+        if (configure) { _client.begin(_config); _lastStatus=0; _statusAttempted=false; }
         if (update) _client.requestUpdate();
         if (!_config.baseUrl.isEmpty() && WiFi.status()==WL_CONNECTED) {
-            if (_client.tick(data)) xQueueOverwrite(_results,&data);
+            // При запуске сначала запрашиваем серверные пороги, затем измерения.
+            // После ошибки повторяем через 30 секунд только до первой успешной загрузки.
             if (!_client.isBusy()) {
                 const uint32_t now=millis();
-                if (!_lastStatus || uint32_t(now-_lastStatus)>=(thresholds().connected?statusPollMs:30000)) { status(); _lastStatus=millis(); }
+                if (ns_http::startup_status_due(thresholds().loaded,_statusAttempted,now,_lastStatus)) {
+                    status(); _lastStatus=millis(); _statusAttempted=true;
+                }
             }
+            if (_client.tick(data)) xQueueOverwrite(_results,&data);
         } else if (WiFi.status()!=WL_CONNECTED) {
             _client.tick(data); // Дать существующему клиенту отменить незавершённый запрос.
-            xSemaphoreTake(_mutex,portMAX_DELAY);
-            _state.connected=false;
-            xSemaphoreGive(_mutex);
+            // Успешно полученный при запуске снимок сохраняется и при потере Wi-Fi.
         }
         xSemaphoreTake(_mutex,portMAX_DELAY);
         _busy=_client.isBusy(); _wanted=_client.isUpdateWanted(); _lastRequest=_client.lastRequestAtMs();

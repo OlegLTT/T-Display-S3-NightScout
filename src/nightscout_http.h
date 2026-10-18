@@ -7,6 +7,10 @@ constexpr int no_wifi = -100;
 constexpr int invalid_url = -101;
 constexpr int body_too_large = -102;
 
+constexpr bool startup_status_due(bool loaded, bool attempted, uint32_t now, uint32_t lastAttempt) {
+    return !loaded && (!attempted || uint32_t(now-lastAttempt) >= 30000);
+}
+
 constexpr uint16_t timeout_ms(uint32_t configured) {
     return configured == 0 ? 15000 : configured < 1000 ? 1000
         : configured > 60000 ? 60000 : uint16_t(configured);

@@ -23,7 +23,7 @@ struct Snapshot {
     float bounds[4] = {};
     char origin[96] = {};
     bool loaded = false;
-    bool connected = false;
+    bool connected = false; // Последний status.json успешно проверен; от текущего Wi-Fi не зависит.
     uint32_t revision = 0;
     uint64_t serverEpochMs = 0;
     uint32_t clockAtMs = 0;
@@ -35,14 +35,23 @@ constexpr
 #else
 inline
 #endif
-bool server_bounds_ready(const Snapshot& state, const char* origin) {
-    if (!state.connected || !state.loaded || state.origin[sizeof(state.origin)-1] != 0
-        || !valid_glucose_bounds(state.bounds)) return false;
-    for (unsigned i=0; i<sizeof(state.origin); ++i) {
-        if (state.origin[i]!=origin[i]) return false;
+bool cached_bounds_ready(const float* bounds, const char* cachedOrigin, const char* origin,
+                         bool serverCache = true) {
+    if (!serverCache || !cachedOrigin[0] || !origin[0] || !valid_glucose_bounds(bounds)) return false;
+    for (unsigned i=0; i<sizeof(Snapshot::origin); ++i) {
+        if (cachedOrigin[i]!=origin[i]) return false;
         if (!origin[i]) return true;
     }
     return false;
+}
+
+#if __cplusplus >= 201402L
+constexpr
+#else
+inline
+#endif
+bool server_bounds_ready(const Snapshot& state, const char* origin) {
+    return state.connected && state.loaded && cached_bounds_ready(state.bounds,state.origin,origin);
 }
 
 constexpr uint64_t server_now(const Snapshot& state, uint32_t now) {
