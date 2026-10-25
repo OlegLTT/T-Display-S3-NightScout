@@ -219,8 +219,6 @@ Nightscout. До первого успешного получения порог
 [M5_NightscoutMon](https://github.com/mlukasek/M5_NightscoutMon),
 автор — Martin Lukasek ([mlukasek](https://github.com/mlukasek)), и адаптированы
 для T-Display S3 и CoreS3 / CoreS3 SE.**
-Источники: [описание кнопок](https://github.com/mlukasek/M5_NightscoutMon#buttons)
-и [исходный код UDP-обмена](https://github.com/mlukasek/M5_NightscoutMon/blob/master/M5_NightscoutMon.ino#L1663).
 
 ## Подключение звука T-Display S3
 
