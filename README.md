@@ -1,5 +1,10 @@
 # Nightscout Monitor
 
+<p align="center">
+  <img src="docs/images/t-display-s3.jpg" alt="LilyGO T-Display S3" height="250">
+  <img src="docs/images/cores3.jpg" alt="M5Stack CoreS3" height="250">
+</p>
+
 Монитор глюкозы для **LilyGO T-Display S3** и **M5Stack CoreS3 / CoreS3 SE**.
 Получает данные из Nightscout, показывает показания и тренд, работает как часы
 и предупреждает звуком о красной зоне или потере свежих данных.
