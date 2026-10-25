@@ -1,6 +1,7 @@
 // Получение данных Nightscout по HTTP/HTTPS с повторными попытками и разбором JSON.
 #pragma once
 #include "app_constants.h"
+#include "nightscout_data.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -32,30 +33,6 @@ struct NSConfig {
   uint32_t weakRssiLogPeriodMs = app_constants::weak_rssi_log_ms;
 
   uint32_t noWifiLogPeriodMs = app_constants::no_wifi_log_ms;
-};
-
-struct NightscoutData {
-  bool ok = false;
-  int  http = 0;
-
-  float    sgv_mmol = NAN;
-  float    delta_mmol = NAN;
-  uint64_t update_time_ms = 0;
-  char     trend[24] = "N/A";
-
-  float    iob = NAN;
-  float    cob = NAN;
-
-  // Заряд выбранного источника в процентах; -1 — нет корректных данных.
-  int      batteryPct = -1;
-  float    pumpBatV   = 0.0f;
-
-  float    sgvBounds[4] = {NAN, NAN, NAN, NAN};
-
-  // Возраст вычисляется перед отрисовкой; INT32_MAX означает неизвестное время.
-  int32_t  ageSec = INT32_MAX;
-  bool     stale5 = false;
-  bool     stale15 = false;
 };
 
 class NightscoutClient {

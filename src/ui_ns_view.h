@@ -1,7 +1,7 @@
 // Подготовка текста, цветов и стрелок из данных Nightscout для обоих экранов.
 #pragma once
 #include <lvgl.h>
-#include "nightscout_client.h"
+#include "nightscout_data.h"
 
 struct NsUiView {
   bool ok = false;

@@ -71,8 +71,12 @@
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
     #define LV_MEM_SIZE (64 * 1024U)          /**< [bytes] */
 
-    /** Size of the memory expand for `lv_malloc()` in bytes */
-    #define LV_MEM_POOL_EXPAND_SIZE 0
+    /** TLSF must accept the extra PSRAM pool registered by LVGL_Display. */
+    #if defined(BOARD_TDISPLAY_S3)
+        #define LV_MEM_POOL_EXPAND_SIZE (256 * 1024U)
+    #else
+        #define LV_MEM_POOL_EXPAND_SIZE 0
+    #endif
 
     /** Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too. */
     #define LV_MEM_ADR 0     /**< 0: unused*/

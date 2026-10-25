@@ -1,7 +1,7 @@
 // Экран часов: время, дата, глюкоза и тренд; цвет учитывает возраст данных.
 #pragma once
 #include <lvgl.h>
-#include "nightscout_client.h"
+#include "nightscout_data.h"
 
 lv_obj_t* ui_clock_create();
 

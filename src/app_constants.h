@@ -132,7 +132,7 @@ constexpr int backlight_resolution_bits = 10;
 // Пороги цветовой индикации; не изменяют условия звуковой тревоги.
 constexpr float delta_neutral_mmol = 0.05f; // В пределах ±порога дельта серая.
 constexpr int battery_red_percent = 15; // Заряд <= порога красный.
-constexpr int battery_orange_percent = 35; // Далее <= порога оранжевый, выше — салатовый.
+constexpr int battery_yellow_percent = 35; // Далее <= порога жёлтый, выше — зелёный.
 
 static_assert(snooze_step_minutes > 0 && snooze_steps > 0
     && unsigned(snooze_step_minutes) * snooze_steps <= 255, "Invalid snooze range");

@@ -42,11 +42,6 @@
   #include <uButtonMulti.h>
 #endif
 
-#if defined(BOARD_ESP32S3_DEV)
-  #include "lcd_bsp.h"
-  #include "FT3168.h"
-#endif
-
 static SettingsStore settingsStore;
 AppSettings appCfg;
 static CaptivePortal portal;
@@ -275,6 +270,9 @@ static void tickButtons() {
       return;
     }
   }
+
+  // Удержание комбинации не должно вызывать действия отдельных кнопок.
+  if (btnBoth.pressing()) return;
 
   if (currentScreen == ScreenId::SCREEN_LOGS) {
     if (now - g_lastScrollMs < app_constants::log_scroll_ms) return;

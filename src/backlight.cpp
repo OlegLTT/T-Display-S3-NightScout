@@ -71,21 +71,24 @@ void Backlight::backlightInit() {
 #endif
 }
 
-// На T-Display отключаем PWM и подаём постоянный высокий уровень на подсветку.
+// Полное заполнение LEDC даёт постоянный HIGH без переключения GPIO между PWM и GPIO.
 void Backlight::backlightForceMax() {
 #if defined(BOARD_M5CORE_S3)
   gfx::Display::instance().set_backlight(gfx::Display::brightness_level::max);
 #else
-  // Готовим HIGH до detach; GPIO не проваливается в плавающее состояние.
-  gpio_set_level(static_cast<gpio_num_t>(_cfg.pin), HIGH);
   if (_pwmAttached) {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcDetach(_cfg.pin);
+    ledcWrite(_cfg.pin, _maxDuty);
 #else
-    ledcDetachPin(_cfg.pin);
+    // Arduino преобразует максимальный duty в 2^resBits: выход постоянно включён.
+    ledcWrite(_cfg.channel, _maxDuty);
 #endif
-    _pwmAttached = false;
+    Serial.printf("Backlight 100%%: duty=%u/%u\n", _maxDuty, _maxDuty);
+    return;
   }
+
+  // Резерв при ошибке инициализации LEDC.
+  gpio_set_level(static_cast<gpio_num_t>(_cfg.pin), HIGH);
   pinMode(_cfg.pin, OUTPUT);
   digitalWrite(_cfg.pin, HIGH);
 

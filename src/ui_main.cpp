@@ -5,6 +5,7 @@
 #include "ui_ns_cache.h"
 #include "trend_arrows.h"
 #include "fonts.h"
+#include <Arduino.h>
 
 #include <lvgl.h>
 #include <cstdio>

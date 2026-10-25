@@ -2,6 +2,7 @@
 #include "LVGL_Display.h"
 #include "gfx/Display.h"
 #include "ui_navigation.h"
+#include <Arduino.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
 
@@ -25,6 +26,21 @@ void LVGL_Display::init() {
 
 void LVGL_Display::init_lvgl() {
     lv_init();
+#if defined(BOARD_TDISPLAY_S3) && LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
+    // Сжатие «10.0» и более широких значений создаёт слой ARGB8888 > 64 КБ.
+    // Отдельный пул PSRAM сохраняет крупный шрифт и память DMA для передачи на LCD.
+    constexpr size_t pool_bytes = LV_MEM_POOL_EXPAND_SIZE;
+    static_assert(pool_bytes >= 256 * 1024, "LVGL must allow the large display layers");
+    void* pool = heap_caps_malloc(pool_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!pool) {
+        Serial.println("[UI] Failed to allocate LVGL PSRAM pool");
+    } else if (!lv_mem_add_pool(pool, pool_bytes)) {
+        heap_caps_free(pool);
+        Serial.println("[UI] Failed to add LVGL PSRAM pool");
+    } else {
+        Serial.printf("[UI] LVGL PSRAM pool ready: %u bytes\n", unsigned(pool_bytes));
+    }
+#endif
     lv_tick_set_cb([]() -> uint32_t {
         return esp_timer_get_time() / 1000ULL;
     });

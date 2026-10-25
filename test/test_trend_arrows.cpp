@@ -53,8 +53,9 @@ constexpr bool all_frames_fit(const Geometry& geometry) {
     const float sines[] = {0, 0.2588190f, 0.5f, 0.7071068f, 0.8660254f, 0.9659258f, 1};
     for (int count = 1; count <= 3; ++count)
         for (unsigned angle = 0; angle < sizeof(cosines) / sizeof(cosines[0]); ++angle)
-            for (int sign = -1; sign <= 1; sign += 2)
-                if (!fits(geometry, count, cosines[angle], sign * sines[angle])) return false;
+            for (int x_sign = -1; x_sign <= 1; x_sign += 2)
+                for (int y_sign = -1; y_sign <= 1; y_sign += 2)
+                    if (!fits(geometry, count, x_sign * cosines[angle], y_sign * sines[angle])) return false;
     return true;
 }
 static_assert(all_frames_fit(main_geometry), "Large arrows must fit and stay separate throughout rotation");

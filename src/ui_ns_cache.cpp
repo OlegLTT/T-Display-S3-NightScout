@@ -1,5 +1,6 @@
 // Кеш отображаемых значений: надписи и цвета обновляются только при изменении.
 #include "ui_ns_cache.h"
+#include "app_constants.h"
 
 #include <cstring>
 #include <math.h>
@@ -43,9 +44,9 @@ const char* ns_battery_icon_for_pct(int pct) {
 
 lv_color_t ns_battery_color_for_pct(int pct) {
   if (pct < 0)   return lv_color_make(160, 160, 160);
-  if (pct <= 15) return lv_color_make(255, 0, 0);
-  if (pct <= 35) return lv_color_make(255, 120, 0);
-  return lv_color_make(100, 255, 0);
+  if (pct <= app_constants::battery_red_percent) return lv_color_make(255, 0, 0);
+  if (pct <= app_constants::battery_yellow_percent) return lv_color_make(255, 255, 0);
+  return lv_color_make(0, 255, 0);
 }
 
 void NsUiCache::reset() {

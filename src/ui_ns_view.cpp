@@ -14,7 +14,7 @@ static lv_color_t zone_color_for_sgv(float sgv, const float b[4]) {
     case GlucoseZone::HighRed:    return lv_color_make(255, 0, 0);
     case GlucoseZone::LowYellow:
     case GlucoseZone::HighYellow:
-#if defined(BOARD_TDISPLAY_S3)
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
       return lv_color_make(255, 255, 0);
 #else
       return lv_color_make(255, 160, 0);
@@ -29,13 +29,6 @@ static lv_color_t delta_color(float d) {
   if (d > app_constants::delta_neutral_mmol)         return lv_color_make(  0, 255,   0);
   if (d < -app_constants::delta_neutral_mmol)        return lv_color_make(255,   0,   0);
                          return lv_color_make(200, 200, 200);
-}
-
-static lv_color_t battery_color_for_pct(int pct) {
-  if (pct < 0)   return lv_color_make(160, 160, 160);
-  if (pct <= app_constants::battery_red_percent) return lv_color_make(255,   0,   0);
-  if (pct <= app_constants::battery_orange_percent) return lv_color_make(255, 120,   0);
-                 return lv_color_make(100, 255,   0);
 }
 
 static void trend_to_angle_and_count(const char* trend, int& angle_deg, int& count) {
@@ -102,7 +95,7 @@ NsUiView ns_make_view(const NightscoutData& ns) {
   } else {
     v.bat[0] = '\0';
   }
-  v.batCol = battery_color_for_pct(ns.batteryPct);
+  v.batCol = ns_battery_color_for_pct(ns.batteryPct);
 
   std::strncpy(v.trend, ns.trend, sizeof(v.trend));
   v.trend[sizeof(v.trend) - 1] = '\0';

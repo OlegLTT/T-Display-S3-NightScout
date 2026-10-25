@@ -3,6 +3,7 @@
 #include "ui_clock.h"
 #include "ui_layout.h"
 #include "fonts.h"
+#include <Arduino.h>
 
 #include <lvgl.h>
 #include <cstdio>
