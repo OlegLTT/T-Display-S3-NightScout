@@ -112,17 +112,19 @@ void service(uint32_t now) {
         if (mode == Mode::Single) mode = Mode::Off;
     }
     if (mode != Mode::Alarm || sounding) return;
-    const uint32_t interval = beepIndex ? (criticalAlarm ? 200 : cfg.secondBeepMs)
-        : (criticalAlarm ? 1500 : cfg.repeatMs);
+    const uint32_t interval = beepIndex
+        ? (criticalAlarm ? app_constants::alarm_critical_beep_interval_ms : cfg.secondBeepMs)
+        : (criticalAlarm ? app_constants::alarm_critical_repeat_ms : cfg.repeatMs);
     if (uint32_t(now - lastBeep) < interval) return;
-    if (!startSound(criticalAlarm ? 100 : cfg.durationMs)) {
+    if (!startSound(criticalAlarm ? app_constants::alarm_critical_beep_ms : cfg.durationMs)) {
         silence();
         mode = Mode::Off;
         ready = false;
         return;
     }
     lastBeep = millis();
-    beepIndex = (beepIndex + 1) % (criticalAlarm ? 3 : 2);
+    beepIndex = (beepIndex + 1) % (criticalAlarm
+        ? app_constants::alarm_critical_beep_count : app_constants::alarm_beep_count);
 }
 
 void run(void*) {
@@ -203,7 +205,7 @@ void setAlarm(bool active, bool critical) {
         mode = Mode::Alarm;
         beepIndex = 0;
         criticalAlarm = critical;
-        lastBeep = millis() - (criticalAlarm ? 1500 : cfg.repeatMs);
+        lastBeep = millis() - (criticalAlarm ? app_constants::alarm_critical_repeat_ms : cfg.repeatMs);
         service(millis());
     }
     xSemaphoreGive(mutex);

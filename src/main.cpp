@@ -588,7 +588,7 @@ static void publishAlarm(uint32_t now) {
 #if defined(BOARD_TDISPLAY_S3)
   buzzer::setAlarm(sounding, severity==2);
 #else
-  display.set_alarm_sound(sounding);
+  display.set_alarm_sound(sounding, severity==2);
 #endif
   const auto& data=haveLastGood?lastGood:nsData;
   const int32_t age=computeAgeSec(data.update_time_ms);

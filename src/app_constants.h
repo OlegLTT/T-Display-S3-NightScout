@@ -55,12 +55,18 @@ constexpr uint8_t default_brightness_percent = 100; // Допустимо 1..100
 constexpr uint8_t snooze_step_minutes = 30;
 constexpr uint8_t snooze_steps = 4;
 constexpr uint32_t snooze_restart_ms = 2000;
-// Общий рисунок звука для обеих плат: два писка. Интервалы считаются от начала
+// На обеих платах: красная зона — три коротких писка, потеря данных — два.
+// Интервалы считаются от начала
 // предыдущего писка, а не от его конца; длительность должна быть меньше интервала.
 constexpr uint32_t alarm_frequency_hz = 1800; // Встроенный динамик CoreS3.
 constexpr uint32_t alarm_beep_ms = 180;
 constexpr uint32_t alarm_second_beep_ms = 360;
 constexpr uint32_t alarm_repeat_ms = 4000;
+constexpr uint8_t alarm_beep_count = 2;
+constexpr uint8_t alarm_critical_beep_count = 3;
+constexpr uint32_t alarm_critical_beep_ms = 100;
+constexpr uint32_t alarm_critical_beep_interval_ms = 200;
+constexpr uint32_t alarm_critical_repeat_ms = 1500;
 constexpr uint8_t cores3_initial_volume = 80; // Аппаратная шкала 0..255 до первого обновления настроек.
 
 // GPIO13 T-Display: установлен пассивный трёхконтактный модуль с входом active LOW.
@@ -138,6 +144,11 @@ static_assert(snooze_step_minutes > 0 && snooze_steps > 0
     && unsigned(snooze_step_minutes) * snooze_steps <= 255, "Invalid snooze range");
 static_assert(alarm_beep_ms > 0 && alarm_beep_ms < alarm_second_beep_ms
     && alarm_beep_ms < alarm_repeat_ms, "Alarm beeps must not overlap");
+static_assert(alarm_beep_count > 0 && alarm_critical_beep_count > 0
+    && alarm_critical_beep_ms > 0
+    && alarm_critical_beep_ms < alarm_critical_beep_interval_ms
+    && alarm_critical_beep_ms < alarm_critical_repeat_ms,
+    "Critical alarm beeps must not overlap");
 static_assert(buzzer_active || buzzer_module_input || !buzzer_inactive_high,
     "A passive two-pin buzzer to GND must idle LOW; HIGH causes DC current");
 static_assert(default_volume_percent <= 100 && default_brightness_percent >= 1

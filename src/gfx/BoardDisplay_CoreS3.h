@@ -21,7 +21,7 @@ public:
     uint16_t height() const;
 
     void set_backlight(brightness_level level);
-    void set_alarm_sound(bool active);
+    void set_alarm_sound(bool active, bool critical = false);
     void set_alarm_volume(uint8_t percent);
     bool alarm_sound_available() const { return m_sound_available; }
     void set_transfer_done_callback(transfer_done_callback_t cb, void* user_data);
@@ -43,7 +43,8 @@ private:
     void update_alarm_sound(uint32_t now);
     bool m_sound_available = false;
     bool m_alarm_active = false;
-    bool m_second_beep = false;
+    bool m_critical_alarm = false;
+    uint8_t m_beep_index = 0;
     uint32_t m_last_beep = 0;
 
     transfer_done_callback_t m_on_transfer_done_callback = nullptr;

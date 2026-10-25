@@ -61,33 +61,39 @@ void BoardDisplay_CoreS3::set_alarm_volume(uint8_t percent) {
     M5.Speaker.setVolume((uint16_t(percent > 100 ? 100 : percent) * 255 + 50) / 100);
 }
 
-void BoardDisplay_CoreS3::set_alarm_sound(bool active) {
+void BoardDisplay_CoreS3::set_alarm_sound(bool active, bool critical) {
     active = active && m_sound_available;
-    if (active == m_alarm_active) return;
+    if (active == m_alarm_active && (!active || critical == m_critical_alarm)) return;
     m_alarm_active = active;
+    M5.Speaker.stop(0);
     if (!active) {
-        M5.Speaker.stop(0);
         return;
     }
-    m_second_beep = false;
-    m_last_beep = millis() - app_constants::alarm_repeat_ms;
-    update_alarm_sound(millis());
+    m_critical_alarm = critical;
+    m_beep_index = 0;
+    const uint32_t now = millis();
+    m_last_beep = now - (critical ? app_constants::alarm_critical_repeat_ms : app_constants::alarm_repeat_ms);
+    update_alarm_sound(now);
 }
 
-// Два сигнала по 180 мс; конечная длительность ограничивает звук даже при задержках основного цикла.
+// Количество и интервалы совпадают с T-Display; конечная длительность не зависит от задержек цикла.
 void BoardDisplay_CoreS3::update_alarm_sound(uint32_t now) {
     if (!m_alarm_active) return;
-    const uint32_t interval = m_second_beep ? app_constants::alarm_second_beep_ms : app_constants::alarm_repeat_ms;
+    const uint32_t interval = m_beep_index
+        ? (m_critical_alarm ? app_constants::alarm_critical_beep_interval_ms : app_constants::alarm_second_beep_ms)
+        : (m_critical_alarm ? app_constants::alarm_critical_repeat_ms : app_constants::alarm_repeat_ms);
     if (now - m_last_beep < interval) return;
 
-    if (!M5.Speaker.tone(app_constants::alarm_frequency_hz, app_constants::alarm_beep_ms, 0, true)) {
+    const uint32_t duration = m_critical_alarm ? app_constants::alarm_critical_beep_ms : app_constants::alarm_beep_ms;
+    if (!M5.Speaker.tone(app_constants::alarm_frequency_hz, duration, 0, true)) {
         M5.Speaker.stop(0);
         m_alarm_active = false;
         m_sound_available = false;
         return;
     }
     m_last_beep = now;
-    m_second_beep = !m_second_beep;
+    m_beep_index = (m_beep_index + 1) % (m_critical_alarm
+        ? app_constants::alarm_critical_beep_count : app_constants::alarm_beep_count);
 }
 
 void BoardDisplay_CoreS3::set_transfer_done_callback(transfer_done_callback_t cb, void* user_data) {
