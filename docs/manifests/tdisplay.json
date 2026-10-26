@@ -1,0 +1,20 @@
+{
+  "name": "Nightscout Monitor - LilyGO T-Display S3",
+  "version": "1.0.0",
+  "board": "tdisplay",
+  "new_install_prompt_erase": false,
+  "new_install_improv_wait_time": 0,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "../firmware/v1.0.0/tdisplay.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ],
+  "sha256": "3350f2488f4f276424dcc5507da6a5f4f7793e773f241a18318c0e79dc30db4c",
+  "size": 1512848
+}

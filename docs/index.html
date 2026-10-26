@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Установка Nightscout Monitor на T-Display S3 и CoreS3 через USB в браузере Chrome или Edge.">
+  <title>Установить Nightscout Monitor</title>
+  <link rel="stylesheet" href="installer.css">
+  <script type="module" src="installer.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <a class="brand" href="https://github.com/OlegLTT/T-Display-S3-NightScout"><span class="mark" aria-hidden="true">NS</span> Nightscout Monitor</a>
+      <a class="version" href="https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.0">Версия 1.0.0 ↗</a>
+    </header>
+
+    <section class="intro">
+      <p class="eyebrow">Установка через USB</p>
+      <h1>Прошивка дисплея<br>прямо из браузера</h1>
+      <p>Выберите свою плату, подключите её к компьютеру и запустите установку. Python и PlatformIO не нужны.</p>
+      <p class="browser-note">Откройте эту страницу в Chrome или Edge на компьютере.</p>
+    </section>
+
+    <div id="browser-warning" class="notice" role="status" hidden></div>
+    <noscript><p class="notice">Для работы установщика включите JavaScript. <a href="https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.0">Скачать прошивки и инструкцию</a>.</p></noscript>
+
+    <fieldset class="boards">
+      <legend><span class="step">1</span> Выберите плату</legend>
+      <div class="board-grid">
+        <label class="board-card">
+          <input type="radio" name="board" value="tdisplay">
+          <span class="board-photo"><img src="images/t-display-s3.jpg" alt="T-Display S3 с двумя кнопками слева от экрана"></span>
+          <span class="board-title">LilyGO T-Display S3</span>
+          <span class="board-caption">Прямоугольный экран · две кнопки</span>
+        </label>
+        <label class="board-card">
+          <input type="radio" name="board" value="cores3">
+          <span class="board-photo"><img src="images/cores3.jpg" alt="M5Stack CoreS3 с сенсорным экраном"></span>
+          <span class="board-title">M5Stack CoreS3 / SE</span>
+          <span class="board-caption">Сенсорный экран · встроенный динамик</span>
+        </label>
+      </div>
+    </fieldset>
+
+    <section class="install-card" aria-labelledby="install-heading">
+      <h2 id="install-heading"><span class="step">2</span> Подключите и установите</h2>
+      <p>Подключите плату к компьютеру USB-кабелем с передачей данных. Закройте программы, которые могут использовать её USB-порт.</p>
+      <div class="reset-note">
+        <strong>Это полная установка.</strong> Сохранённые Wi-Fi и настройки Nightscout будут удалены. После установки настройте дисплей заново.
+      </div>
+      <label class="consent"><input type="checkbox" id="reset-consent"> <span>Я готов заново настроить Wi-Fi и Nightscout.</span></label>
+      <p id="install-status" class="install-status" role="status" aria-live="polite">Сначала выберите плату по фотографии.</p>
+      <button id="retry-check" class="retry" type="button" hidden>Повторить проверку</button>
+      <esp-web-install-button id="installer">
+        <button id="install-button" slot="activate" type="button" disabled>Подключить дисплей</button>
+        <p slot="unsupported" class="notice">Этот браузер не поддерживает прошивку через USB. Используйте Chrome или Edge на компьютере.</p>
+        <p slot="not-allowed" class="notice">Для установки откройте эту страницу по защищённой ссылке HTTPS.</p>
+      </esp-web-install-button>
+      <p class="dialog-help">В открывшемся окне выберите USB-порт платы, затем <strong>Install</strong> — «Установить». Не отключайте кабель до завершения.</p>
+      <p class="update-link">Хотите сохранить настройки уже установленного дисплея? <a href="https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.0">Обновите его из архива по инструкции релиза.</a></p>
+    </section>
+
+    <section class="after-install">
+      <h2><span class="step">3</span> Настройте дисплей</h2>
+      <p>После установки на экране появится QR-код. Подключите телефон к сети <strong>NS-Monitior-Setup</strong>, откройте <strong>192.168.4.1</strong> и укажите домашний Wi-Fi и адрес Nightscout.</p>
+    </section>
+
+    <section class="help" aria-label="Помощь">
+      <details><summary>Плата не появилась в списке портов</summary><p>Попробуйте другой USB-кабель: некоторые кабели подходят только для зарядки. Подключите плату напрямую к компьютеру, закройте Serial Monitor и другие программы прошивки. Если порт не появился, откройте инструкцию своей платы: <a href="https://github.com/Xinyuan-LilyGO/T-Display-S3">LilyGO T-Display S3</a> или <a href="https://docs.m5stack.com/en/core/CoreS3">M5Stack CoreS3</a>.</p></details>
+      <details><summary>Установка завершилась ошибкой</summary><p>Не выбирайте другую модель платы. Проверьте кабель, переподключите устройство и повторите установку. Для установки из файла доступны <a href="https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.0">архивы прошивок с инструкцией</a>.</p></details>
+    </section>
+
+    <footer><a href="https://github.com/OlegLTT/T-Display-S3-NightScout">Исходный код и описание проекта</a><span>Установщик на базе <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a></span></footer>
+  </main>
+</body>
+</html>
