@@ -5,8 +5,6 @@
   <img src="docs/images/cores3.jpg" alt="M5Stack CoreS3" height="250">
 </p>
 
-**[Установить через браузер](https://olegltt.github.io/T-Display-S3-NightScout/)** — Chrome или Edge на компьютере, без Python и PlatformIO.
-
 Монитор глюкозы для **LilyGO T-Display S3** и **M5Stack CoreS3 / CoreS3 SE**.
 Получает данные из Nightscout, показывает показания и тренд, работает как часы
 и предупреждает звуком о выходе из заданного уровня глюкозы и потере связи с сервером.
@@ -14,6 +12,8 @@
 Из настроек Nightscout импортируются
 **четыре порога глюкозы**; остальные параметры сохраняются отдельно на каждом
 дисплее. Пауза тревог синхронизируется по локальной Wi-Fi сети.
+
+**[Установить через браузер](https://olegltt.github.io/T-Display-S3-NightScout/)** — Chrome или Edge на компьютере, без Python и PlatformIO.
 
 ## Поддерживаемые устройства
 
