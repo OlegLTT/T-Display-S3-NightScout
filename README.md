@@ -239,8 +239,8 @@ Nightscout. До первого успешного получения порог
 | Библиотека | Назначение в проекте |
 | --- | --- |
 | [GSON](https://github.com/GyverLibs/GSON) | Разбор JSON-ответов Nightscout: измерения, дополнительные показатели и пороги глюкозы |
-| [StringUtils](https://github.com/GyverLibs/StringUtils) | Работа со строковыми данными и хешами ключей JSON (`su::SH`) при разборе ответов |
-| [uButton](https://github.com/GyverLibs/uButton) | Обработка нажатий, удержаний и сочетания двух аппаратных кнопок на LilyGO T-Display S3 |
+| [StringUtils](https://github.com/GyverLibs/StringUtils) | Работа со строковыми данными и хешами ключей JSON при разборе ответов |
+| [uButton](https://github.com/GyverLibs/uButton) | Обработка нажатий на LilyGO T-Display S3 |
 
 Логика и формат **LAN-синхронизации паузы тревог (Snooze)** заимствованы из
 [M5_NightscoutMon](https://github.com/mlukasek/M5_NightscoutMon),
