@@ -215,11 +215,6 @@ Nightscout. До первого успешного получения порог
 Пауза и отмена передаются через **UDP broadcast, порт 50555** устройствам в одной
 подсети с точно совпадающим адресом Nightscout. 
 
-**Логика и формат синхронизации по LAN заимствованы из
-[M5_NightscoutMon](https://github.com/mlukasek/M5_NightscoutMon),
-автор — Martin Lukasek ([mlukasek](https://github.com/mlukasek)), и адаптированы
-для T-Display S3 и CoreS3 / CoreS3 SE.**
-
 ## Подключение звука T-Display S3
 
 Текущая конфигурация рассчитана на пассивный трёхконтактный модуль зуммера
@@ -235,6 +230,29 @@ Nightscout. До первого успешного получения порог
 `buzzer_active`, `buzzer_module_input`, `buzzer_inactive_high`.
 У активного зуммера со встроенным генератором доступны включение и выключение.
 На CoreS3 используется встроенный динамик.
+
+## Использованные библиотеки и благодарности
+
+В проекте используются библиотеки **AlexGyver (Гайвера)** из
+[GyverLibs](https://github.com/GyverLibs):
+
+| Библиотека | Назначение в проекте |
+| --- | --- |
+| [GSON](https://github.com/GyverLibs/GSON) | Разбор JSON-ответов Nightscout: измерения, дополнительные показатели и пороги глюкозы |
+| [StringUtils](https://github.com/GyverLibs/StringUtils) | Работа со строковыми данными и хешами ключей JSON (`su::SH`) при разборе ответов |
+| [uButton](https://github.com/GyverLibs/uButton) | Обработка нажатий, удержаний и сочетания двух аппаратных кнопок на LilyGO T-Display S3 |
+
+GSON и StringUtils используются на обеих платах, uButton — только на T-Display S3.
+Зависимости перечислены в [platformio.ini](platformio.ini) и устанавливаются
+PlatformIO автоматически при сборке.
+
+Логика и формат **LAN-синхронизации паузы тревог (Snooze)** заимствованы из
+[M5_NightscoutMon](https://github.com/mlukasek/M5_NightscoutMon),
+автор — **Martin Lukasek** ([mlukasek](https://github.com/mlukasek)), и адаптированы
+для T-Display S3 и CoreS3 / CoreS3 SE. Синхронизация передаёт включение и отмену
+паузы между устройствами в одной подсети с одинаковым адресом Nightscout.
+
+Спасибо авторам за открытые библиотеки и исходный код.
 
 ## Сборка и прошивка
 
