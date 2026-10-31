@@ -48,7 +48,7 @@ async function verifyFirmware() {
     const manifest = await response.json();
     const build = manifest.builds?.[0];
     const part = build?.parts?.[0];
-    if (manifest.board !== selected || manifest.version !== "1.0.0" ||
+    if (manifest.board !== selected || manifest.version !== "1.0.1" ||
         manifest.builds.length !== 1 || build.chipFamily !== "ESP32-S3" ||
         build.parts.length !== 1 || part.offset !== 0 ||
         !/^[a-f0-9]{64}$/.test(manifest.sha256)) throw new Error("manifest");
