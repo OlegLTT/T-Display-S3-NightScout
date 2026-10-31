@@ -45,15 +45,18 @@ void NightscoutSession::begin(const NSConfig& cfg) {
     if (!_mutex || !_results) { logs::logE("[NS] Session allocation failed"); return; }
     xSemaphoreTake(_mutex,portMAX_DELAY);
     _nextConfig = cfg; _configure = true; _update = true;
+    _updateFromLan = false;
     _state=ns_alarm::Snapshot{};
     strlcpy(_state.message,"Connecting to Nightscout...",sizeof(_state.message));
     xSemaphoreGive(_mutex);
     if (!_task && xTaskCreate(run,"nightscout",12288,this,1,&_task) != pdPASS)
         logs::logE("[NS] Failed to start network task");
 }
-void NightscoutSession::requestUpdate() {
+void NightscoutSession::requestUpdate(bool from_lan) {
     if (!_mutex) return;
-    xSemaphoreTake(_mutex,portMAX_DELAY); _update=true; xSemaphoreGive(_mutex);
+    xSemaphoreTake(_mutex,portMAX_DELAY);
+    _update=true; _updateFromLan=_updateFromLan||from_lan;
+    xSemaphoreGive(_mutex);
 }
 bool NightscoutSession::tick(NightscoutData& out) {
     if (!_mutex || !_results) return false;
@@ -187,14 +190,16 @@ void NightscoutSession::work() {
     for (;;) {
         xSemaphoreTake(_mutex,portMAX_DELAY);
         const bool configure=_configure, update=_update;
+        const bool updateFromLan=_updateFromLan;
         if (configure) {
             _config=_nextConfig; _configure=false; _state=ns_alarm::Snapshot{}; xQueueReset(_results);
             strlcpy(_state.message,"Connecting to Nightscout...",sizeof(_state.message));
         }
         _update=false;
+        _updateFromLan=false;
         xSemaphoreGive(_mutex);
         if (configure) { _client.begin(_config); _lastStatus=0; _statusAttempted=false; }
-        if (update) _client.requestUpdate();
+        if (update) _client.requestUpdate(updateFromLan);
         if (!_config.baseUrl.isEmpty() && WiFi.status()==WL_CONNECTED) {
             // При запуске сначала запрашиваем серверные пороги, затем измерения.
             // После ошибки повторяем через 30 секунд только до первой успешной загрузки.

@@ -13,6 +13,8 @@ constexpr uint32_t max_seconds = 86400;
 constexpr size_t packet_capacity = 96;
 constexpr char prefix[] = "M5_Nightscout SNOOZE: USR=";
 constexpr char separator[] = ", SnoozeUntil=";
+// Дополнительная команда T-Disp-NS; формат SNOOZE остаётся совместимым с M5.
+constexpr char refresh_prefix[] = "M5_Nightscout REFRESH: USR=";
 
 #if __cplusplus >= 201402L
 #define SNOOZE_CONSTEXPR14 constexpr
@@ -74,6 +76,20 @@ SNOOZE_CONSTEXPR14 bool seconds_left(uint32_t until, uint64_t epoch, uint32_t& s
 inline size_t encode(char* data, size_t capacity, uint16_t crc, uint32_t until) {
     const int size = std::snprintf(data, capacity, "%s%u%s%lu", prefix, unsigned(crc),
         separator, static_cast<unsigned long>(until));
+    return size > 0 && size_t(size) < capacity ? size_t(size) + 1 : 0;
+}
+
+SNOOZE_CONSTEXPR14 bool decode_refresh(const char* data, size_t size, uint16_t expected_crc) {
+    if (!size || size >= packet_capacity) return false;
+    size_t pos = 0;
+    uint32_t crc = 0;
+    if (!detail::consume(data, size, pos, refresh_prefix)
+        || !detail::decimal(data, size, pos, crc) || crc != expected_crc) return false;
+    return pos == size || (pos + 1 == size && data[pos] == '\0');
+}
+
+inline size_t encode_refresh(char* data, size_t capacity, uint16_t crc) {
+    const int size = std::snprintf(data, capacity, "%s%u", refresh_prefix, unsigned(crc));
     return size > 0 && size_t(size) < capacity ? size_t(size) + 1 : 0;
 }
 

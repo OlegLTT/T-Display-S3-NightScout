@@ -17,14 +17,16 @@ void NightscoutClient::begin(const NSConfig& cfg) {
   _retryCount = 0;
   _retryAtMs = 0;
   _wantUpdate = false;
+  _updateSource = nightscout_update::Source{};
   _lastNoWifiLogMs = 0;
   _lastWeakLogMs = 0;
   _r = Req{};
   _r.ph = Phase::Idle;
 }
 
-void NightscoutClient::requestUpdate() {
+void NightscoutClient::requestUpdate(bool from_lan) {
   _wantUpdate = true;
+  _updateSource.request(from_lan);
 }
 
 String NightscoutClient::buildBase(String url) const {
@@ -123,6 +125,7 @@ void NightscoutClient::scheduleRetry() {
   if (_cfg.retryMax != 0 && _retryCount >= _cfg.retryMax) {
     logs::logEf("[NS] Request failed: retries exhausted (%u)", (unsigned)_cfg.retryMax);
     _wantUpdate = false;
+    _updateSource = nightscout_update::Source{};
     _r.ph = Phase::Idle;
     return;
   }
@@ -131,6 +134,7 @@ void NightscoutClient::scheduleRetry() {
   _retryAtMs = millis() + _cfg.retryDelayMs;
 
   _wantUpdate = true;
+  _updateSource.retry();
 
   logs::logWf("[NS] Request failed: retry %u in %u ms",
               (unsigned)_retryCount,
@@ -322,6 +326,7 @@ bool NightscoutClient::tick(NightscoutData& out) {
       if (isBusy()) {
         abortReq();
         _wantUpdate = true;
+        _updateSource.retry();
       }
       _r.ph = Phase::WaitWiFi;
     }
@@ -349,6 +354,7 @@ bool NightscoutClient::tick(NightscoutData& out) {
   if (_r.ph == Phase::Idle) {
     if (_wantUpdate) {
       _wantUpdate = false;
+      _updateSource.start();
       String base = buildBase(_cfg.baseUrl);
 
       if (base.isEmpty()) {
@@ -356,6 +362,7 @@ bool NightscoutClient::tick(NightscoutData& out) {
         applyBounds(out);
         out.ok = false;
         out.http = 0;
+        out.from_lan = _updateSource.from_lan();
         scheduleRetry();
         return true;
       }
@@ -367,6 +374,7 @@ bool NightscoutClient::tick(NightscoutData& out) {
         applyBounds(out);
         out.ok = false;
         out.http = -1;
+        out.from_lan = _updateSource.from_lan();
         abortReq();
         scheduleRetry();
         return true;
@@ -379,6 +387,7 @@ bool NightscoutClient::tick(NightscoutData& out) {
 
   bool changed = stepReq(out);
   if (!changed) return false;
+  out.from_lan = _updateSource.from_lan();
 
   if (!out.ok) {
     scheduleRetry();

@@ -2,6 +2,7 @@
 #pragma once
 #include "app_constants.h"
 #include "nightscout_data.h"
+#include "nightscout_update_source.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -38,7 +39,7 @@ struct NSConfig {
 class NightscoutClient {
 public:
   void begin(const NSConfig& cfg);
-  void requestUpdate();
+  void requestUpdate(bool from_lan = false);
   bool tick(NightscoutData& out);
 
   bool isBusy() const { return _r.ph != Phase::Idle && _r.ph != Phase::WaitWiFi && _r.ph != Phase::RetryWait; }
@@ -89,6 +90,7 @@ private:
   Req _r{};
 
   bool     _wantUpdate = false;
+  nightscout_update::Source _updateSource;
 
   uint8_t  _retryCount = 0;
   uint32_t _retryAtMs  = 0;

@@ -40,3 +40,26 @@ constexpr bool invalid_packets() {
 }
 static_assert(valid_packets(), "Accept original packets with/without NUL, countdown, expiry and OFF without clock");
 static_assert(invalid_packets(), "Reject wrong users, malformed/overflowed packets, unknown clock and excessive duration");
+
+constexpr char refresh[] = "M5_Nightscout REFRESH: USR=47933";
+constexpr bool refresh_packets() {
+    if (!snooze_protocol::decode_refresh(refresh, sizeof(refresh), 0xBB3D)) return false;
+    if (!snooze_protocol::decode_refresh(refresh, sizeof(refresh)-1, 0xBB3D)) return false;
+    if (snooze_protocol::decode_refresh(refresh, sizeof(refresh), 123)) return false;
+    if (snooze_protocol::decode_refresh(refresh, 0, 0xBB3D)) return false;
+    if (snooze_protocol::decode_refresh(refresh, snooze_protocol::packet_capacity, 0xBB3D)) return false;
+    constexpr char missing_crc[] = "M5_Nightscout REFRESH: USR=";
+    if (snooze_protocol::decode_refresh(missing_crc, sizeof(missing_crc), 0)) return false;
+    constexpr char negative_crc[] = "M5_Nightscout REFRESH: USR=-1";
+    if (snooze_protocol::decode_refresh(negative_crc, sizeof(negative_crc), 0xFFFF)) return false;
+    constexpr char overflow_crc[] = "M5_Nightscout REFRESH: USR=4294967296";
+    if (snooze_protocol::decode_refresh(overflow_crc, sizeof(overflow_crc), 0)) return false;
+    constexpr char trailing_crc[] = "M5_Nightscout REFRESH: USR=47933junk";
+    if (snooze_protocol::decode_refresh(trailing_crc, sizeof(trailing_crc), 0xBB3D)) return false;
+    constexpr char extra_nul[] = "M5_Nightscout REFRESH: USR=47933\0";
+    if (snooze_protocol::decode_refresh(extra_nul, sizeof(extra_nul), 0xBB3D)) return false;
+    if (snooze_protocol::decode_refresh(packet, sizeof(packet), 0xBB3D)) return false;
+    uint32_t until = 42;
+    return !snooze_protocol::decode(refresh, sizeof(refresh), 0xBB3D, until) && until == 42;
+}
+static_assert(refresh_packets(), "Refresh needs a matching user, no clock; reject malformed and snooze packets");

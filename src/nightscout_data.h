@@ -5,6 +5,8 @@
 
 struct NightscoutData {
   bool ok = false;
+  // Источник запроса, а не команда тревоги: результат LAN-обновления не рассылаем обратно.
+  bool from_lan = false;
   int http = 0;
   float sgv_mmol = NAN;
   float delta_mmol = NAN;

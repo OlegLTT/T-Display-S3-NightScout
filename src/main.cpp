@@ -56,6 +56,7 @@ static NightscoutSession g_ns;
 static ns_alarm::Snapshot nsAlarmSnapshot;
 static ns_alarm::Kind nsAlarmKind = ns_alarm::Kind::None;
 static uint32_t nsImportedRevision = 0;
+static bool nsAlarmFromLan = false;
 #else
 static NightscoutClient g_ns;
 #endif
@@ -398,6 +399,9 @@ static void tickNightscout() {
 
   bool nsChanged = g_ns.tick(nsData);
   if (nsChanged) {
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+    nsAlarmFromLan = nsData.from_lan;
+#endif
     needUpdateScreen = true;
     if (nsData.ok) {
       lastGood = nsData;
@@ -616,7 +620,17 @@ static void tickAlarm() {
   const bool enabled=appCfg.alarmVolume>0;
   alarmState.update(now, enabled, data.ok && age >= 0 && age < ns_alarm::max_age_seconds,
                     nsAlarmKind != ns_alarm::Kind::None, enabled, missing);
-  snoozeLan.tick(alarmState, appCfg.hostSite, snoozeEpoch(now), now);
+  // Смена причины (низкая/высокая глюкоза/потеря данных) запускает одну рассылку.
+  // Громкость и локальная пауза не мешают соседям получить свежие данные.
+  const uint8_t cause = missing ? 8 : uint8_t(nsAlarmKind);
+  const bool refresh = snoozeLan.tick(alarmState, appCfg.hostSite, snoozeEpoch(now), now, cause,
+                                     nsAlarmFromLan);
+  nsAlarmFromLan = false;
+  if (refresh) {
+    logs::logI("[NS LAN] Requesting Nightscout update");
+    // Помечаем и уже ожидающий запрос: локальная причина не должна потерять LAN-источник.
+    g_ns.requestUpdate(true);
+  }
   publishAlarm(now);
 }
 #endif

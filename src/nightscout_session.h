@@ -10,7 +10,7 @@
 class NightscoutSession {
 public:
     void begin(const NSConfig& cfg);
-    void requestUpdate();
+    void requestUpdate(bool from_lan = false);
     bool tick(NightscoutData& out);
     bool isBusy() const;
     bool isUpdateWanted() const;
@@ -26,6 +26,7 @@ private:
     NSConfig _config;
     ns_alarm::Snapshot _state;
     bool _configure = false, _update = false, _busy = false, _wanted = false;
+    bool _updateFromLan = false;
     uint32_t _lastRequest = 0;
     uint32_t _lastStatus = 0;
     bool _statusAttempted = false;
