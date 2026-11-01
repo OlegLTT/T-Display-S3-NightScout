@@ -4,7 +4,6 @@
 #include "ui_clock.h"
 #include "ui_navigation.h"
 #include "ui_ns_view.h"
-#include "glucose_delta.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -73,9 +72,6 @@ bool check_delta_colors(lv_obj_t* screens[2], const char* output) {
         {0.7f, "+0.7", 0xFF0000}, {-0.7f, "-0.7", 0xFF0000},
         {0.28f, "+0.3", 0xFFFF00}, {-0.28f, "-0.3", 0xFFFF00},
         {0.58f, "+0.6", 0xFF0000}, {-0.58f, "-0.6", 0xFF0000},
-        {glucose_delta::per_five_minutes(0.6f, 10.0f), "+0.3", 0xFFFF00},
-        {glucose_delta::per_five_minutes(-0.6f, 10.0f), "-0.3", 0xFFFF00},
-        {glucose_delta::per_five_minutes(0.2f, 1.0f), "+1.0", 0xFF0000},
         {std::numeric_limits<float>::quiet_NaN(), "--", 0xC8C8C8},
         {std::numeric_limits<float>::infinity(), "--", 0xC8C8C8}
     };
@@ -126,7 +122,7 @@ bool check_delta_colors(lv_obj_t* screens[2], const char* output) {
     data.stale15 = true;
     view = ns_make_view(data);
     if (std::strcmp(view.delta, "--") || rgb(view.deltaCol) != 0x787878) return false;
-    std::puts("PASS: delta colors, sign, rounding, normalization, missing/stale data on main and clock screens");
+    std::puts("PASS: delta colors, sign, rounding, missing/stale data on main and clock screens");
     return true;
 }
 }

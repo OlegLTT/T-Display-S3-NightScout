@@ -2,7 +2,6 @@
 #include "app_constants.h"
 #include "nightscout_client.h"
 #include "nightscout_alarm_state.h"
-#include "glucose_delta.h"
 #include "logs.h"
 #include <math.h>
 #include <time.h>
@@ -442,21 +441,8 @@ static float entryToDeltaNumber(gson::Entry e) {
 
 static float parseDelta(gson::Entry delta) {
   if (!delta) return NAN;
-  const auto absolute = delta.get(SH("absolute"));
-  const auto elapsed = delta.get(SH("elapsedMins"));
-  const auto times = delta.get(SH("times"));
-  if (absolute && (elapsed || times)) {
-    float minutes = entryToDeltaNumber(elapsed);
-    if (!elapsed) {
-      const int64_t recent = times.get(SH("recent")).toInt64();
-      const int64_t previous = times.get(SH("previous")).toInt64();
-      if (previous > 0 && recent > previous) minutes = float(recent - previous) / 60000.0f;
-    }
-    // Nightscout может уже интерполировать delta.scaled при пропусках >9 минут.
-    // Пересчитываем исходную delta.absolute (mg/dl), чтобы не делать это дважды.
-    return glucose_delta::per_five_minutes(ns_alarm::mgdl_to_mmol(entryToDeltaNumber(absolute)), minutes);
-  }
-  // Совместимость с ответами без исходной дельты/интервала: готовое значение сервера.
+  // Готовая дельта Nightscout: сервер уже учитывает свой интервал и интерполяцию.
+  // Здесь меняются только единицы измерения, без пересчёта absolute/elapsedMins.
   const float mgdl = entryToDeltaNumber(delta.get(SH("mgdl")));
   return isfinite(mgdl) ? ns_alarm::mgdl_to_mmol(mgdl)
                        : entryToDeltaNumber(delta.get(SH("scaled")));

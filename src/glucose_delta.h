@@ -6,12 +6,6 @@
 namespace glucose_delta {
 enum class Zone { Invalid, Green, Yellow, Red };
 
-// Входная дельта в ммоль/л; интервал берётся из измерений, а не из таймера HTTP.
-constexpr float per_five_minutes(float delta_mmol, float elapsed_minutes) {
-    return std::isfinite(delta_mmol) && std::isfinite(elapsed_minutes) && elapsed_minutes > 0
-        ? delta_mmol * (app_constants::delta_reference_minutes / elapsed_minutes) : NAN;
-}
-
 constexpr Zone zone(float delta_mmol) {
     return !std::isfinite(delta_mmol) ? Zone::Invalid
         : std::fabs(delta_mmol) >= app_constants::delta_red_mmol ? Zone::Red

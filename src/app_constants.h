@@ -136,7 +136,6 @@ constexpr int backlight_pwm_hz = 12000;
 constexpr int backlight_resolution_bits = 10;
 
 // Пороги цветовой индикации; не изменяют условия звуковой тревоги.
-constexpr float delta_reference_minutes = 5.0f; // Интервал отображаемой дельты.
 constexpr float delta_yellow_mmol = 0.3f; // Модуль дельты >= порога жёлтый.
 constexpr float delta_red_mmol = 0.6f; // Далее >= порога красный, ниже жёлтого — зелёный.
 constexpr int battery_red_percent = 15; // Заряд <= порога красный.
@@ -161,6 +160,6 @@ static_assert(wifi_slots > 0 && wifi_slots <= wifi_credential_capacity, "Too man
 static_assert(portal_password_length >= 8 && portal_password_length <= 63, "Invalid AP password length");
 static_assert(data_expiry_seconds > fresh_age_minutes * 60 && data_expiry_seconds % 60 == 0,
     "Data expiry must be in whole minutes and exceed fresh age");
-static_assert(delta_reference_minutes > 0 && delta_yellow_mmol > 0
+static_assert(delta_yellow_mmol > 0
     && delta_red_mmol > delta_yellow_mmol, "Invalid delta color thresholds");
 } // namespace app_constants
