@@ -3,6 +3,7 @@
 #include "ui_ns_view.h"
 #include "ui_ns_cache.h"
 #include "glucose_zone.h"
+#include "glucose_delta.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -25,10 +26,12 @@ static lv_color_t zone_color_for_sgv(float sgv, const float b[4]) {
 }
 
 static lv_color_t delta_color(float d) {
-  if (!std::isfinite(d)) return lv_color_make(200, 200, 200);
-  if (d > app_constants::delta_neutral_mmol)         return lv_color_make(  0, 255,   0);
-  if (d < -app_constants::delta_neutral_mmol)        return lv_color_make(255,   0,   0);
-                         return lv_color_make(200, 200, 200);
+  switch (glucose_delta::zone(d)) {
+    case glucose_delta::Zone::Green:  return lv_color_make(0, 255, 0);
+    case glucose_delta::Zone::Yellow: return lv_color_make(255, 255, 0);
+    case glucose_delta::Zone::Red:    return lv_color_make(255, 0, 0);
+    default:                         return lv_color_make(200, 200, 200);
+  }
 }
 
 static void trend_to_angle_and_count(const char* trend, int& angle_deg, int& count) {
@@ -75,8 +78,13 @@ NsUiView ns_make_view(const NightscoutData& ns) {
     std::snprintf(v.sgv, sizeof(v.sgv), "--");
   }
 
-  if (v.ok && !v.stale && std::isfinite(ns.delta_mmol)) {
-    std::snprintf(v.delta, sizeof(v.delta), "%+.1f", ns.delta_mmol);
+  const bool delta_fresh = v.ok && !ns.stale15 && ns.update_time_ms > 0
+      && ((ns.ageSec >= 0 && ns.ageSec != INT32_MAX)
+          ? ns.ageSec < app_constants::data_expiry_seconds
+          : v.haveAge && now - upd < app_constants::data_expiry_seconds);
+  const float delta = glucose_delta::display_value(ns.delta_mmol);
+  if (delta_fresh && std::isfinite(delta)) {
+    std::snprintf(v.delta, sizeof(v.delta), "%+.1f", delta);
   } else {
     std::snprintf(v.delta, sizeof(v.delta), "--");
   }
@@ -87,8 +95,7 @@ NsUiView ns_make_view(const NightscoutData& ns) {
   v.zoneCol = (v.ok && !v.stale) ? zone_color_for_sgv(ns.sgv_mmol, ns.sgvBounds)
                                 : lv_color_make(120,120,120);
 
-  v.deltaCol = (v.ok && !v.stale) ? delta_color(ns.delta_mmol)
-                                 : lv_color_make(120,120,120);
+  v.deltaCol = delta_fresh ? delta_color(delta) : lv_color_make(120,120,120);
 
   if (ns.batteryPct >= 0) {
     std::snprintf(v.bat, sizeof(v.bat), "%d%%", ns.batteryPct);

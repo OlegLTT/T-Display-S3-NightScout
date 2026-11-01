@@ -9,7 +9,7 @@ struct NightscoutData {
   bool from_lan = false;
   int http = 0;
   float sgv_mmol = NAN;
-  float delta_mmol = NAN;
+  float delta_mmol = NAN; // Изменение в ммоль/л, приведённое к пяти минутам.
   uint64_t update_time_ms = 0;
   char trend[24] = "N/A";
   float iob = NAN;

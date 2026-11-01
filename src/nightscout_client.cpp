@@ -2,6 +2,7 @@
 #include "app_constants.h"
 #include "nightscout_client.h"
 #include "nightscout_alarm_state.h"
+#include "glucose_delta.h"
 #include "logs.h"
 #include <math.h>
 #include <time.h>
@@ -427,6 +428,40 @@ static int entryToBatteryPercent(gson::Entry e) {
   return static_cast<int>(percent);
 }
 
+static float entryToDeltaNumber(gson::Entry e) {
+  if (!e || (!e.is(gson::Type::Int) && !e.is(gson::Type::Float)
+             && !e.is(gson::Type::String))) return NAN;
+  char text[32];
+  if (e.value().length() >= sizeof(text) || !entryToCstr(e, text, sizeof(text))) return NAN;
+  char* end = nullptr;
+  const float value = strtof(text, &end);
+  if (end == text || !isfinite(value)) return NAN;
+  while (*end && isspace(static_cast<unsigned char>(*end))) ++end;
+  return *end ? NAN : value;
+}
+
+static float parseDelta(gson::Entry delta) {
+  if (!delta) return NAN;
+  const auto absolute = delta.get(SH("absolute"));
+  const auto elapsed = delta.get(SH("elapsedMins"));
+  const auto times = delta.get(SH("times"));
+  if (absolute && (elapsed || times)) {
+    float minutes = entryToDeltaNumber(elapsed);
+    if (!elapsed) {
+      const int64_t recent = times.get(SH("recent")).toInt64();
+      const int64_t previous = times.get(SH("previous")).toInt64();
+      if (previous > 0 && recent > previous) minutes = float(recent - previous) / 60000.0f;
+    }
+    // Nightscout может уже интерполировать delta.scaled при пропусках >9 минут.
+    // Пересчитываем исходную delta.absolute (mg/dl), чтобы не делать это дважды.
+    return glucose_delta::per_five_minutes(ns_alarm::mgdl_to_mmol(entryToDeltaNumber(absolute)), minutes);
+  }
+  // Совместимость с ответами без исходной дельты/интервала: готовое значение сервера.
+  const float mgdl = entryToDeltaNumber(delta.get(SH("mgdl")));
+  return isfinite(mgdl) ? ns_alarm::mgdl_to_mmol(mgdl)
+                       : entryToDeltaNumber(delta.get(SH("scaled")));
+}
+
 // Разбор свойств Nightscout; проценты заряда и напряжение помпы — разные показатели.
 bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out) const {
   gson::Parser p;
@@ -466,7 +501,7 @@ bool NightscoutClient::parseV2Properties(const String& json, NightscoutData& out
   }
 
   gson::Entry delta = p.get(SH("delta"));
-  out.delta_mmol = delta ? entryToFloatAny(delta.get(SH("scaled"))) : NAN;
+  out.delta_mmol = parseDelta(delta);
 
   gson::Entry iob = p.get(SH("iob"));
   out.iob = iob ? entryToFloatAny(iob.get(SH("iob"))) : NAN;

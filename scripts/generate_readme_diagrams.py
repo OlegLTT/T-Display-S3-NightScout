@@ -6,6 +6,7 @@ ui_navigation.cpp, ui_layout.h and captive_portal.cpp. These are drawings,
 not screenshots; no firmware source or user settings are changed.
 """
 from html import escape
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +91,16 @@ def alarm(core, height, state="normal"):
     return body
 
 
+def delta_color(value):
+    try:
+        magnitude = abs(Decimal(value)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+        if not magnitude.is_finite():
+            return "#787878"
+        return RED if magnitude >= Decimal("0.6") else YELLOW if magnitude >= Decimal("0.3") else GREEN
+    except InvalidOperation:
+        return "#787878"
+
+
 def main_screen(core=False, glucose="5.8", color=GREEN, state="normal", age="2 мин", delta="+0.1"):
     height = 240 if core else 170
     content = height - 44 if core else height
@@ -99,7 +110,7 @@ def main_screen(core=False, glucose="5.8", color=GREEN, state="normal", age="2 �
     body += text(160, 17, "12:45", 17, GREY, anchor="middle")
     body += text(318, 17, age, 17, GREEN, anchor="end")
     body += text(130 if core else 140, content / 2 + 47, glucose, 128 if core else 116, color, 600, "middle", "Arial Narrow, Arial, sans-serif")
-    body += text(281, content - 76, delta, 32, GREEN if delta.startswith('+') else RED if delta != "--" else "#787878", anchor="middle")
+    body += text(281, content - 76, delta, 32, delta_color(delta), anchor="middle")
     if glucose != "--":
         body += arrow(280, content - 38, CYAN, 45 if delta.startswith('-') else -45)
     body += text(1, content - 3, "I: --" if glucose == "--" else "I: 1.25", 17, GREY)
@@ -110,7 +121,7 @@ def main_screen(core=False, glucose="5.8", color=GREEN, state="normal", age="2 �
 def clock_screen(core=False):
     height, content = (240, 196) if core else (170, 170)
     body = rect(0, 0, 320, height, "#000")
-    body += text(6, 21, "5.8", 18, GREEN) + text(119, 21, "+0.1", 18, GREEN)
+    body += text(6, 21, "5.8", 18, GREEN) + text(119, 21, "+0.1", 18, delta_color("+0.1"))
     body += arrow(195, 14, GREEN, -45, .36)
     body += text(314, 21, "2 мин", 18, GREEN, anchor="end")
     body += text(160 if core else 184, content / 2 + 31, "12:45", 90 if core else 82, GREEN, 700, "middle", "Arial Narrow, Arial, sans-serif")
@@ -238,7 +249,7 @@ def main():
                 (6, sx + 360, bottom, 277, 190 if core else 163),
                 (7, 1126 if core else 31, 350 if core else 285, 281 if core else 22, 218 if core else 85)]
 
-    pair("clock.svg", "Часы · время и краткие показания", "Цвет времени, глюкозы, дельты и стрелок соответствует зоне глюкозы.",
+    pair("clock.svg", "Часы · время и краткие показания", "Время, глюкоза и стрелки — цвет зоны; дельта — скорость изменения за пять минут.",
          clock_screen, clock_pins, [(1, "Глюкоза, ммоль/л"), (2, "Дельта и стрелка тренда"),
                                    (3, "Возраст измерения"), (4, "Текущее время крупными цифрами"),
                                    (5, "Дата"), (6, "День недели"), (7, "Индикатор звука / кнопка Snooze")],

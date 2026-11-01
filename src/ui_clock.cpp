@@ -194,7 +194,7 @@ void clock_update_full(const NightscoutData& ns) {
   lv_obj_set_style_text_color(lbl_time, zoneColUsed, LV_PART_MAIN);
 
   ui_set_label_if_changed(lbl_delta, v.delta, g_cache.delta, sizeof(g_cache.delta));
-  lv_obj_set_style_text_color(lbl_delta, zoneColUsed, LV_PART_MAIN);
+  lv_obj_set_style_text_color(lbl_delta, color_by_age(v.deltaCol, v.haveAge, v.ageMin, v.stale), LV_PART_MAIN);
 
   {
     char ageText[16] = "--";

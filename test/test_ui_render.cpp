@@ -4,10 +4,12 @@
 #include "ui_clock.h"
 #include "ui_navigation.h"
 #include "ui_ns_view.h"
+#include "glucose_delta.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <limits>
 
 namespace {
 uint32_t ticks;
@@ -49,6 +51,84 @@ void screenshot(const char* path) {
     }
     std::fclose(out);
 }
+
+lv_obj_t* find_label(lv_obj_t* root, const char* text) {
+    if (lv_obj_check_type(root, &lv_label_class) && std::strcmp(lv_label_get_text(root), text) == 0)
+        return root;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(root); ++i)
+        if (auto* result = find_label(lv_obj_get_child(root, i), text)) return result;
+    return nullptr;
+}
+
+uint32_t rgb(lv_color_t color) { return lv_color_to_u32(color) & 0xFFFFFF; }
+
+bool check_delta_colors(lv_obj_t* screens[2], const char* output) {
+    struct Example { float value; const char* text; uint32_t color; };
+    const Example examples[] = {
+        {0.0f, "+0.0", 0x00FF00}, {-0.01f, "+0.0", 0x00FF00},
+        {0.2f, "+0.2", 0x00FF00}, {-0.2f, "-0.2", 0x00FF00},
+        {0.3f, "+0.3", 0xFFFF00}, {-0.3f, "-0.3", 0xFFFF00},
+        {0.5f, "+0.5", 0xFFFF00}, {-0.5f, "-0.5", 0xFFFF00},
+        {0.6f, "+0.6", 0xFF0000}, {-0.6f, "-0.6", 0xFF0000},
+        {0.7f, "+0.7", 0xFF0000}, {-0.7f, "-0.7", 0xFF0000},
+        {0.28f, "+0.3", 0xFFFF00}, {-0.28f, "-0.3", 0xFFFF00},
+        {0.58f, "+0.6", 0xFF0000}, {-0.58f, "-0.6", 0xFF0000},
+        {glucose_delta::per_five_minutes(0.6f, 10.0f), "+0.3", 0xFFFF00},
+        {glucose_delta::per_five_minutes(-0.6f, 10.0f), "-0.3", 0xFFFF00},
+        {glucose_delta::per_five_minutes(0.2f, 1.0f), "+1.0", 0xFF0000},
+        {std::numeric_limits<float>::quiet_NaN(), "--", 0xC8C8C8},
+        {std::numeric_limits<float>::infinity(), "--", 0xC8C8C8}
+    };
+    NightscoutData data;
+    data.ok = true;
+    data.sgv_mmol = 3.0f; // A red glucose zone must not force the delta to red.
+    data.iob = 1.0f;
+    data.cob = 20.0f;
+    data.batteryPct = 80;
+    data.update_time_ms = uint64_t(std::time(nullptr)) * 1000;
+    const float bounds[] = {3.5f, 4.5f, 7.5f, 9.5f};
+    std::memcpy(data.sgvBounds, bounds, sizeof(bounds));
+    for (int screen = 0; screen < 2; ++screen) {
+        lv_screen_load(screens[screen]);
+        for (unsigned index = 0; index < sizeof(examples) / sizeof(examples[0]); ++index) {
+            const auto& example = examples[index];
+            data.delta_mmol = example.value;
+            const auto view = ns_make_view(data);
+            if (std::strcmp(view.delta, example.text) || rgb(view.deltaCol) != example.color) {
+                std::printf("Delta view mismatch at case %u: %s color=%06lX\n", index, view.delta,
+                            (unsigned long)rgb(view.deltaCol));
+                return false;
+            }
+            if (screen) clock_update_full(data);
+            else main_update_full(data);
+            auto* label = find_label(screens[screen], example.text);
+            if (!label || rgb(lv_obj_get_style_text_color(label, LV_PART_MAIN)) != example.color) {
+                std::printf("Delta label mismatch on screen %d at case %u\n", screen, index);
+                return false;
+            }
+            advance(250);
+            if (output && (index == 2 || index == 4 || index == 8)) {
+                char path[256];
+                std::snprintf(path, sizeof(path), "%s/delta-screen-%d-case-%u.ppm", output, screen, index);
+                screenshot(path);
+            }
+        }
+    }
+    // At exactly 15 minutes and without a usable measurement time, the delta is grey.
+    data.delta_mmol = 0.7f;
+    data.update_time_ms = uint64_t(std::time(nullptr) - 900) * 1000;
+    auto view = ns_make_view(data);
+    if (std::strcmp(view.delta, "--") || rgb(view.deltaCol) != 0x787878) return false;
+    data.update_time_ms = 0;
+    view = ns_make_view(data);
+    if (std::strcmp(view.delta, "--") || rgb(view.deltaCol) != 0x787878) return false;
+    data.update_time_ms = uint64_t(std::time(nullptr)) * 1000;
+    data.stale15 = true;
+    view = ns_make_view(data);
+    if (std::strcmp(view.delta, "--") || rgb(view.deltaCol) != 0x787878) return false;
+    std::puts("PASS: delta colors, sign, rounding, normalization, missing/stale data on main and clock screens");
+    return true;
+}
 }
 
 bool getLocalTime(tm* info, uint32_t) {
@@ -76,6 +156,8 @@ int main(int argc, char** argv) {
     auto* clock_screen = ui_clock_create();
     ui_navigation::init(nullptr);
     ui_navigation::update(false, false);
+    lv_obj_t* screens[] = {main_screen, clock_screen};
+    if (!check_delta_colors(screens, argc > 1 ? argv[1] : nullptr)) return 7;
     NightscoutData data;
     data.ok = true;
     data.iob = 1.25f;
