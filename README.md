@@ -15,8 +15,6 @@
 
 **[Установить через браузер](https://olegltt.github.io/T-Display-S3-NightScout/)** — Chrome или Edge на компьютере.
 
-**[Релиз v1.0.2](https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.2)** — архивы прошивок для обеих плат, инструкция и контрольные суммы SHA-256.
-
 ## Поддерживаемые устройства
 
 | Устройство | Экран | Управление | Звук |
