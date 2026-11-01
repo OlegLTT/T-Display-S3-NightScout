@@ -1,6 +1,6 @@
 {
   "name": "Nightscout Monitor - M5Stack CoreS3 / SE",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "board": "cores3",
   "new_install_prompt_erase": false,
   "new_install_improv_wait_time": 0,
@@ -9,12 +9,12 @@
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "../firmware/v1.0.1/cores3.bin",
+          "path": "../firmware/v1.0.2/cores3.bin",
           "offset": 0
         }
       ]
     }
   ],
-  "sha256": "aa34faf07e3af1becc2379c4d80f555e036e9b790cf61eb9cabb110a966fb3c4",
-  "size": 1674368
+  "sha256": "3d45e83c30f2097d44e1c90ccdaf942968ea72eee011dbef785927c627fff755",
+  "size": 1675312
 }
