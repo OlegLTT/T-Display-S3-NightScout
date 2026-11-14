@@ -1,0 +1,21 @@
+{
+  "name": "Nightscout Monitor - M5Stack Core Basic / Gray",
+  "version": "1.0.3",
+  "board": "m5stack",
+  "new_install_prompt_erase": false,
+  "new_install_improv_wait_time": 0,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        {
+          "path": "../firmware/v1.0.3/m5stack.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ],
+  "sha256": "a8be05bed00de8bf0ea6eb5bd40147ab9944ce2c53838a8545310f1541aadcde",
+  "size": 1740256,
+  "source_commit": "5d47016a3d38dc4b93bfb6fed1019a181ac75cf0"
+}

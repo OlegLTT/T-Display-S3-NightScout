@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Установка Nightscout Monitor на T-Display S3 и CoreS3 через USB в браузере Chrome или Edge.">
+  <meta name="description" content="Установка Nightscout Monitor на T-Display S3, CoreS3 и M5Stack Core Basic / Gray через USB в браузере Chrome или Edge.">
   <title>Установить Nightscout Monitor</title>
-  <link rel="stylesheet" href="installer.css">
-  <script type="module" src="installer.js?v=1.0.2"></script>
+  <link rel="stylesheet" href="installer.css?v=1.0.3">
+  <script type="module" src="installer.js?v=1.0.3"></script>
 </head>
 <body>
   <main>
     <header>
       <a class="brand" href="https://github.com/OlegLTT/T-Display-S3-NightScout"><span class="mark" aria-hidden="true">NS</span> Nightscout Monitor</a>
-      <a class="version" href="https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.2">Версия 1.0.2 ↗</a>
+      <a class="version" href="https://github.com/OlegLTT/T-Display-S3-NightScout#readme">Описание проекта ↗</a>
     </header>
 
     <section class="intro">
@@ -23,7 +23,7 @@
     </section>
 
     <div id="browser-warning" class="notice" role="status" hidden></div>
-    <noscript><p class="notice">Для работы установщика включите JavaScript. <a href="https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.2">Скачать прошивки и инструкцию</a>.</p></noscript>
+    <noscript><p class="notice">Для работы установщика включите JavaScript. <a href="https://github.com/OlegLTT/T-Display-S3-NightScout#сборка-и-прошивка">Открыть инструкцию по прошивке</a>.</p></noscript>
 
     <fieldset class="boards">
       <legend><span class="step">1</span> Выберите плату</legend>
@@ -39,6 +39,12 @@
           <span class="board-photo"><img src="images/cores3-drawing.png" alt="Рисунок M5Stack CoreS3 с сенсорным экраном"></span>
           <span class="board-title">M5Stack CoreS3 / SE</span>
           <span class="board-caption">Сенсорный экран · встроенный динамик</span>
+        </label>
+        <label class="board-card">
+          <input type="radio" name="board" value="m5stack">
+          <span class="board-photo"><img src="images/m5stack-drawing.png" alt="Рисунок M5Stack Core Basic / Gray с тремя кнопками под экраном"></span>
+          <span class="board-title">M5Stack Core Basic / Gray</span>
+          <span class="board-caption">Три кнопки · встроенный динамик</span>
         </label>
       </div>
     </fieldset>
@@ -58,7 +64,7 @@
         <p slot="not-allowed" class="notice">Для установки откройте эту страницу по защищённой ссылке HTTPS.</p>
       </esp-web-install-button>
       <p class="dialog-help">В открывшемся окне выберите USB-порт платы, затем <strong>Install</strong> — «Установить». Не отключайте кабель до завершения.</p>
-      <p class="update-link">Хотите сохранить настройки уже установленного дисплея? <a href="https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.2">Обновите его из архива по инструкции релиза.</a></p>
+      <p class="update-link">Хотите сохранить настройки уже установленного дисплея? <a href="https://github.com/OlegLTT/T-Display-S3-NightScout#сборка-и-прошивка">Обновите его через PlatformIO по инструкции проекта.</a> Для T-Display S3 и CoreS3 также доступны <a href="https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.2">архивы прошивок.</a></p>
     </section>
 
     <section class="after-install">
@@ -67,8 +73,8 @@
     </section>
 
     <section class="help" aria-label="Помощь">
-      <details><summary>Плата не появилась в списке портов</summary><p>Попробуйте другой USB-кабель: некоторые кабели подходят только для зарядки. Подключите плату напрямую к компьютеру, закройте Serial Monitor и другие программы прошивки. Если порт не появился, откройте инструкцию своей платы: <a href="https://github.com/Xinyuan-LilyGO/T-Display-S3">LilyGO T-Display S3</a> или <a href="https://docs.m5stack.com/en/core/CoreS3">M5Stack CoreS3</a>.</p></details>
-      <details><summary>Установка завершилась ошибкой</summary><p>Не выбирайте другую модель платы. Проверьте кабель, переподключите устройство и повторите установку. Для установки из файла доступны <a href="https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.2">архивы прошивок с инструкцией</a>.</p></details>
+      <details><summary>Плата не появилась в списке портов</summary><p>Попробуйте другой USB-кабель: некоторые кабели подходят только для зарядки. Подключите плату напрямую к компьютеру, закройте Serial Monitor и другие программы прошивки. Если порт не появился, откройте инструкцию своей платы: <a href="https://github.com/Xinyuan-LilyGO/T-Display-S3">LilyGO T-Display S3</a>, <a href="https://docs.m5stack.com/en/core/CoreS3">M5Stack CoreS3</a> или <a href="https://docs.m5stack.com/en/core/Basic">M5Stack Core Basic / Gray</a>.</p></details>
+      <details><summary>Установка завершилась ошибкой</summary><p>Не выбирайте другую модель платы. Проверьте кабель, переподключите устройство и повторите установку. Другие способы прошивки описаны <a href="https://github.com/OlegLTT/T-Display-S3-NightScout#сборка-и-прошивка">в инструкции проекта</a>.</p></details>
     </section>
 
     <footer><a href="https://github.com/OlegLTT/T-Display-S3-NightScout">Исходный код и описание проекта</a><span>Установщик на базе <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a></span></footer>

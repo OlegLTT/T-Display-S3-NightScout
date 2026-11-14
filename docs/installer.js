@@ -1,6 +1,7 @@
 const boards = Object.freeze({
-  tdisplay: { name: "LilyGO T-Display S3", manifest: "manifests/tdisplay.json" },
-  cores3: { name: "M5Stack CoreS3 / SE", manifest: "manifests/cores3.json" },
+  tdisplay: { name: "LilyGO T-Display S3", manifest: "manifests/tdisplay.json", version: "1.0.2", chipFamily: "ESP32-S3" },
+  cores3: { name: "M5Stack CoreS3 / SE", manifest: "manifests/cores3.json", version: "1.0.2", chipFamily: "ESP32-S3" },
+  m5stack: { name: "M5Stack Core Basic / Gray", manifest: "manifests/m5stack.json", version: "1.0.3", chipFamily: "ESP32" },
 });
 const installer = document.querySelector("#installer");
 const button = document.querySelector("#install-button");
@@ -42,14 +43,15 @@ async function verifyFirmware() {
   if (!supported || !selected) return;
   message("Проверяю файлы прошивки…");
   try {
-    const manifestUrl = new URL(boards[selected].manifest, location.href);
+    const board = boards[selected];
+    const manifestUrl = new URL(board.manifest, location.href);
     const response = await fetch(manifestUrl, { signal, cache: "no-cache" });
     if (!response.ok) throw new Error("manifest");
     const manifest = await response.json();
     const build = manifest.builds?.[0];
     const part = build?.parts?.[0];
-    if (manifest.board !== selected || manifest.version !== "1.0.2" ||
-        manifest.builds.length !== 1 || build.chipFamily !== "ESP32-S3" ||
+    if (manifest.board !== selected || manifest.version !== board.version ||
+        manifest.builds.length !== 1 || build.chipFamily !== board.chipFamily ||
         build.parts.length !== 1 || part.offset !== 0 ||
         !/^[a-f0-9]{64}$/.test(manifest.sha256)) throw new Error("manifest");
     const firmwareUrl = new URL(part.path, manifestUrl);
@@ -67,7 +69,7 @@ async function verifyFirmware() {
     updateButton();
   } catch (error) {
     if (signal.aborted) return;
-    message("Не удалось проверить прошивку. Проверьте интернет и повторите проверку. Также можно скачать архив из релиза.", true);
+    message("Не удалось проверить прошивку. Проверьте интернет и повторите проверку. Другие способы прошивки описаны в инструкции проекта на GitHub.", true);
     retry.hidden = false;
     updateButton();
   }
@@ -92,7 +94,7 @@ if (!supported) {
       updateButton();
     })
     .catch(() => {
-      moduleFailure = "Не удалось загрузить установщик. Обновите страницу или скачайте архив прошивки из релиза.";
+      moduleFailure = "Не удалось загрузить установщик. Обновите страницу или воспользуйтесь инструкцией проекта на GitHub.";
       message(moduleFailure, true);
     });
 }
