@@ -981,7 +981,7 @@ void CaptivePortal::handleCfg() {
     j += String(step * app_constants::snooze_step_minutes);
   }
   j += "]";
-#if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
+#if defined(BOARD_USES_M5UNIFIED) || defined(BOARD_TDISPLAY_S3)
   j += ",\"soundAlarmSupported\":true";
 #else
   j += ",\"soundAlarmSupported\":false";
@@ -1050,7 +1050,7 @@ void CaptivePortal::handleSave() {
     }
     s.batterySource = source == "1" ? BatterySource::Pump : BatterySource::Blueberry;
   }
-#if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
+#if defined(BOARD_USES_M5UNIFIED) || defined(BOARD_TDISPLAY_S3)
   if (_srv.hasArg("alarmVolume") && !parseVolume(_srv.arg("alarmVolume"), s.alarmVolume)) {
     _srv.send(400, "text/plain", "alarmVolume must be 0..100");
     return;

@@ -1,5 +1,6 @@
 // Подготовка текста, цветов и стрелок из данных Nightscout для обоих экранов.
 #include "app_constants.h"
+#include "board_config.h"
 #include "ui_ns_view.h"
 #include "ui_ns_cache.h"
 #include "glucose_zone.h"
@@ -15,7 +16,7 @@ static lv_color_t zone_color_for_sgv(float sgv, const float b[4]) {
     case GlucoseZone::HighRed:    return lv_color_make(255, 0, 0);
     case GlucoseZone::LowYellow:
     case GlucoseZone::HighYellow:
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_USES_M5UNIFIED)
       return lv_color_make(255, 255, 0);
 #else
       return lv_color_make(255, 160, 0);

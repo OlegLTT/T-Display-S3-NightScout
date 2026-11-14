@@ -220,7 +220,7 @@ lv_qrcode_set_quiet_zone(qr_url, true);
     lv_obj_set_style_text_align(lines[i], LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_label_set_long_mode(lines[i], LV_LABEL_LONG_CLIP);
   }
-#elif defined(BOARD_M5CORE_S3)
+#elif defined(BOARD_USES_M5UNIFIED)
 
   constexpr int lineStep = 18;
   const int textTop = H - margin - 4 * lineStep;

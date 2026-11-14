@@ -21,9 +21,9 @@ inline void fit_beside_alarm(lv_obj_t* label, int right, int y_offset) {
         (left + right) / 2 - lv_display_get_horizontal_resolution(nullptr) / 2, y_offset);
 #endif
 }
-#if defined(BOARD_M5CORE_S3)
+#if defined(BOARD_USES_M5UNIFIED)
 
-// Нижняя полоса CoreS3 предназначена для сенсорного управления отсрочкой.
+// Одинаковая нижняя строка звука на M5Stack Core и CoreS3.
 constexpr int reserved_bottom_height = 44;
 #else
 constexpr int reserved_bottom_height = 0;
@@ -39,7 +39,7 @@ inline int content_height(bool reserve_alarm_control = true) {
 }
 
 inline void prepare_screen(lv_obj_t* screen, bool reserve_alarm_control = true) {
-#if defined(BOARD_M5CORE_S3)
+#if defined(BOARD_USES_M5UNIFIED)
     lv_obj_set_style_pad_bottom(screen,
         reserve_alarm_control ? reserved_bottom_height : 0, 0);
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);

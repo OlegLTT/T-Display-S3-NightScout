@@ -21,6 +21,18 @@
   // Подсветкой управляет M5Unified через контроллер питания, не GPIO.
   #define PIN_BACKLIGHT     -1
 
+#elif defined(BOARD_M5STACK)
+
+// ------- M5Stack Core Basic / Gray -------
+  #define BOARD_NAME        "M5Stack"
+
+  // Подсветка и три кнопки A/B/C обслуживаются M5Unified.
+  #define PIN_BACKLIGHT     -1
+
 #else
-  #error "Не определена плата! Задай BOARD_TDISPLAY_S3 / BOARD_M5CORE_S3 в build_flags."
+  #error "Не определена плата! Задай BOARD_TDISPLAY_S3 / BOARD_M5CORE_S3 / BOARD_M5STACK в build_flags."
+#endif
+
+#if defined(BOARD_M5CORE_S3) || defined(BOARD_M5STACK)
+  #define BOARD_USES_M5UNIFIED 1
 #endif

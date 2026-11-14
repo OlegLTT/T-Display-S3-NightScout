@@ -6,9 +6,9 @@
   #include "gfx/BoardDisplay_TDisplayS3.h"
   namespace gfx { using Display = BoardDisplay_TDisplayS3; }
 
-#elif defined(BOARD_M5CORE_S3)
-  #include "gfx/BoardDisplay_CoreS3.h"
-  namespace gfx { using Display = BoardDisplay_CoreS3; }
+#elif defined(BOARD_USES_M5UNIFIED)
+  #include "gfx/BoardDisplay_M5Stack.h"
+  namespace gfx { using Display = BoardDisplay_M5Stack; }
 
 #else
   #error "No board selected"

@@ -55,10 +55,10 @@ constexpr uint8_t default_brightness_percent = 100; // Допустимо 1..100
 constexpr uint8_t snooze_step_minutes = 30;
 constexpr uint8_t snooze_steps = 4;
 constexpr uint32_t snooze_restart_ms = 2000;
-// На обеих платах: красная зона — три коротких писка, потеря данных — два.
+// На всех платах: красная зона — три коротких писка, потеря данных — два.
 // Интервалы считаются от начала
 // предыдущего писка, а не от его конца; длительность должна быть меньше интервала.
-constexpr uint32_t alarm_frequency_hz = 1800; // Встроенный динамик CoreS3.
+constexpr uint32_t alarm_frequency_hz = 1800; // Встроенный динамик M5Stack / CoreS3.
 constexpr uint32_t alarm_beep_ms = 180;
 constexpr uint32_t alarm_second_beep_ms = 360;
 constexpr uint32_t alarm_repeat_ms = 4000;
@@ -67,7 +67,7 @@ constexpr uint8_t alarm_critical_beep_count = 3;
 constexpr uint32_t alarm_critical_beep_ms = 100;
 constexpr uint32_t alarm_critical_beep_interval_ms = 200;
 constexpr uint32_t alarm_critical_repeat_ms = 1500;
-constexpr uint8_t cores3_initial_volume = 80; // Аппаратная шкала 0..255 до первого обновления настроек.
+constexpr uint8_t m5_initial_volume = 80; // Аппаратная шкала 0..255 до первого обновления настроек.
 
 // GPIO13 T-Display: установлен пассивный трёхконтактный модуль с входом active LOW.
 // module_input=true — управляющий вход модуля; active=false — сигнал через PWM.
@@ -83,6 +83,7 @@ constexpr size_t wifi_credential_capacity = 10; // Внутренний запа
 constexpr char wifi_default_hostname[] = "NS-Monitior";
 constexpr char wifi_tdisplay_hostname[] = "NS-Monitior";
 constexpr char wifi_cores3_hostname[] = "NS-Monitior";
+constexpr char wifi_m5stack_hostname[] = "NS-Monitior";
 constexpr uint32_t wifi_connect_timeout_ms = 20000; // Ожидание при начальном выборе сети.
 constexpr uint32_t wifi_retry_delay_ms = 500; // Пауза между проверками WiFiMulti при первом подключении.
 constexpr uint8_t wifi_begin_attempts = 3;
@@ -99,7 +100,7 @@ constexpr uint32_t ntp_resync_seconds = 24 * 60 * 60;
 constexpr char ntp_primary[] = "pool.ntp.org";
 constexpr char ntp_secondary[] = "time.nist.gov";
 
-// Кнопки T-Display (uButton). Увеличение debounce лучше фильтрует дребезг,
+// Кнопки T-Display (uButton) и M5Stack (M5Unified). Увеличение debounce лучше фильтрует дребезг,
 // но замедляет реакцию. hold — порог удержания, step — задержка/период повтора.
 constexpr uint16_t button_debounce_ms = 50;
 constexpr uint16_t button_hold_ms = 600;

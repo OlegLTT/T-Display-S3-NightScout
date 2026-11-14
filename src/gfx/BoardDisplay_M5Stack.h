@@ -1,21 +1,22 @@
-// Дисплей, динамик, сенсор и кнопка питания CoreS3 через M5Unified.
+// Общий драйвер M5Stack Core и CoreS3: дисплей, динамик и кнопки через M5Unified.
 #pragma once
 
 #include "board_config.h"
 
-#if BOARD_M5CORE_S3
+#if defined(BOARD_USES_M5UNIFIED)
 
 #include <cstdint>
 
 namespace gfx {
 
-class BoardDisplay_CoreS3 {
+class BoardDisplay_M5Stack {
 public:
     using transfer_done_callback_t = void (*)(void*);
     enum class brightness_level : uint8_t { min = 0, max = 255 };
     enum class button_event : uint8_t { none, click, double_click, hold };
+    enum class button_id : uint8_t { power, a, b, c, a_c };
 
-    static BoardDisplay_CoreS3& instance();
+    static BoardDisplay_M5Stack& instance();
 
     uint16_t width() const;
     uint16_t height() const;
@@ -30,15 +31,16 @@ public:
     void update();
     bool get_touch(uint16_t& x, uint16_t& y) const;
 
-    button_event take_button_event();
+    button_event take_button_event(button_id id = button_id::power);
+    bool take_button_press();
     void reset_button_events();
 
 private:
-    BoardDisplay_CoreS3();
-    ~BoardDisplay_CoreS3() = default;
+    BoardDisplay_M5Stack();
+    ~BoardDisplay_M5Stack() = default;
 
-    BoardDisplay_CoreS3(const BoardDisplay_CoreS3&) = delete;
-    BoardDisplay_CoreS3& operator=(const BoardDisplay_CoreS3&) = delete;
+    BoardDisplay_M5Stack(const BoardDisplay_M5Stack&) = delete;
+    BoardDisplay_M5Stack& operator=(const BoardDisplay_M5Stack&) = delete;
 
     void update_alarm_sound(uint32_t now);
     bool m_sound_available = false;
@@ -50,7 +52,12 @@ private:
     transfer_done_callback_t m_on_transfer_done_callback = nullptr;
     void* m_on_transfer_done_user_data = nullptr;
 
-    button_event m_button_event = button_event::none;
+    button_event m_button_events[5] = {};
+#if defined(BOARD_M5STACK)
+    bool m_buttons_ac_active = false;
+    bool m_buttons_ac_held = false;
+#endif
+    bool m_button_pressed = false;
     bool m_button_click_pending = false;
     uint32_t m_button_clicked_at = 0;
 };

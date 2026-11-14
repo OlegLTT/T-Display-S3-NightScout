@@ -101,9 +101,9 @@ void LVGL_Display::init_touch() {
 #endif
 }
 
-// На CoreS3 сначала обновляются кнопки и звук, затем выполняются таймеры LVGL.
+// На M5Stack сначала обновляются кнопки и звук, затем выполняются таймеры LVGL.
 void LVGL_Display::loop() {
-#if defined(BOARD_M5CORE_S3)
+#if defined(BOARD_USES_M5UNIFIED)
     Display::instance().update();
 #endif
     lv_timer_handler();

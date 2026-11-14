@@ -51,7 +51,7 @@ static WifiManagerConfig wifiCfg;
 
 static LogBuffer g_logs;
 
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_USES_M5UNIFIED)
 static NightscoutSession g_ns;
 static ns_alarm::Snapshot nsAlarmSnapshot;
 static ns_alarm::Kind nsAlarmKind = ns_alarm::Kind::None;
@@ -170,7 +170,7 @@ static void changeBacklight() {
   needUpdateScreen = true;
 }
 
-#if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
+#if defined(BOARD_USES_M5UNIFIED) || defined(BOARD_TDISPLAY_S3)
 static AlarmState alarmState;
 static MissingDataAlarm missingDataAlarm;
 static SnoozeLan snoozeLan;
@@ -233,6 +233,40 @@ static void tickCoreButton() {
       break;
     case Event::none: break;
   }
+}
+#endif
+
+#if defined(BOARD_M5STACK)
+// Кнопки слева направо: 1=A, 2=B, 3=C. После удержания клика нет.
+static void tickM5StackButtons() {
+  using Event = gfx::Display::button_event;
+  using Button = gfx::Display::button_id;
+  auto& display = gfx::Display::instance();
+  const auto a = display.take_button_event(Button::a);
+  const auto b = display.take_button_event(Button::b);
+  const auto c = display.take_button_event(Button::c);
+  const auto ac = display.take_button_event(Button::a_c);
+  const bool pressed = display.take_button_press();
+  if (portal.active()) {
+    // Отпускание кнопки, открывшей настройки, не перезапускает устройство.
+    if (pressed) g_rebootRequested = true;
+    return;
+  }
+
+  if (ac == Event::hold) { enterLogs(); return; }
+  if ((b == Event::click || ac == Event::click) && currentScreen == ScreenId::SCREEN_LOGS) {
+    exitLogs();
+    return;
+  }
+  if (a == Event::hold) { enterSettings(); return; }
+  if (currentScreen == ScreenId::SCREEN_LOGS) {
+    if (a == Event::click) ui_logs_scroll(+1);
+    if (c == Event::click) ui_logs_scroll(-1);
+    return;
+  }
+  if (a == Event::click) changeBacklight();
+  if (c == Event::click) cycleAlarmSnooze();
+  if (b == Event::hold) changeScreen();
 }
 #endif
 
@@ -316,6 +350,8 @@ static void tickButtons() {
 static void initWifi() {
 #if defined(BOARD_M5CORE_S3)
   wifiCfg.hostname = app_constants::wifi_cores3_hostname;
+#elif defined(BOARD_M5STACK)
+  wifiCfg.hostname = app_constants::wifi_m5stack_hostname;
 #else
   wifiCfg.hostname = app_constants::wifi_tdisplay_hostname;
 #endif
@@ -399,7 +435,7 @@ static void tickNightscout() {
 
   bool nsChanged = g_ns.tick(nsData);
   if (nsChanged) {
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_USES_M5UNIFIED)
     nsAlarmFromLan = nsData.from_lan;
 #endif
     needUpdateScreen = true;
@@ -409,7 +445,7 @@ static void tickNightscout() {
     }
   }
 
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_USES_M5UNIFIED)
   nsAlarmSnapshot=g_ns.thresholds();
   if (ns_alarm::server_bounds_ready(nsAlarmSnapshot,appCfg.hostSite)
       && nsImportedRevision!=nsAlarmSnapshot.revision) {
@@ -457,7 +493,7 @@ static void tickTimeResync() {
 static void tickPortal() {
 
   portal.tick();
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_USES_M5UNIFIED)
   wifiMgr.tick();
   tickNightscout();
 #endif
@@ -543,9 +579,12 @@ void setup() {
   gfx::Display::instance().reset_button_events();
 #endif
 
-#if defined(BOARD_TDISPLAY_S3)
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5STACK)
   ui_navigation::init(nullptr);
   ui_navigation::update(true, false);
+#if defined(BOARD_M5STACK)
+  gfx::Display::instance().reset_button_events();
+#endif
 #endif
 
   if (!appCfg.onboardingDone) {
@@ -563,7 +602,7 @@ void setup() {
 // Неизвестное время или метка из будущего возвращают INT32_MAX.
 static int32_t computeAgeSec(uint64_t update_ms) {
   time_t nowSec = time(nullptr);
-#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_M5CORE_S3)
+#if defined(BOARD_TDISPLAY_S3) || defined(BOARD_USES_M5UNIFIED)
   if (nowSec<=app_constants::valid_epoch_seconds) nowSec=ns_alarm::server_now(nsAlarmSnapshot,millis())/1000;
 #endif
   if (nowSec <= app_constants::valid_epoch_seconds || update_ms == 0) return INT32_MAX;
@@ -572,7 +611,7 @@ static int32_t computeAgeSec(uint64_t update_ms) {
   return (int32_t)(nowSec - sensTime);
 }
 
-#if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
+#if defined(BOARD_USES_M5UNIFIED) || defined(BOARD_TDISPLAY_S3)
 
 static uint64_t snoozeEpoch(uint32_t now) {
   const time_t epoch = time(nullptr);
@@ -638,13 +677,18 @@ static void tickAlarm() {
 void loop() {
   backlight.setSettingsBoost(portal.active());
 
-#if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
+#if defined(BOARD_USES_M5UNIFIED) || defined(BOARD_TDISPLAY_S3)
   tickAlarm();
 #endif
 #if defined(BOARD_M5CORE_S3)
   tickCoreButton();
   ui_navigation::update(currentScreen == ScreenId::SCREEN_LOGS, portal.active());
   ui_navigation::poll();
+#endif
+
+#if defined(BOARD_M5STACK)
+  tickM5StackButtons();
+  ui_navigation::update(currentScreen == ScreenId::SCREEN_LOGS, portal.active());
 #endif
 
   #if defined(BOARD_TDISPLAY_S3)
@@ -662,7 +706,7 @@ void loop() {
       if (currentScreen == ScreenId::SCREEN_SETTINGS) ui_settings_update_from_portal(portal);
     }
     tickPortal();
-#if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
+#if defined(BOARD_USES_M5UNIFIED) || defined(BOARD_TDISPLAY_S3)
     tickAlarm();
 #endif
     gfx::LVGL_Display::instance().loop();
@@ -673,7 +717,7 @@ void loop() {
   wifiMgr.tick();
 
   tickNightscout();
-#if defined(BOARD_M5CORE_S3) || defined(BOARD_TDISPLAY_S3)
+#if defined(BOARD_USES_M5UNIFIED) || defined(BOARD_TDISPLAY_S3)
   tickAlarm();
 #endif
 

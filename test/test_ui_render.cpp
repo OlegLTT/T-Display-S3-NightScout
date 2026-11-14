@@ -3,6 +3,7 @@
 #include "ui_main.h"
 #include "ui_clock.h"
 #include "ui_navigation.h"
+#include "ui_layout.h"
 #include "ui_ns_view.h"
 #include <cstdio>
 #include <cstdlib>
@@ -12,9 +13,17 @@
 
 namespace {
 uint32_t ticks;
+#if LV_MEM_POOL_EXPAND_SIZE > 0
 alignas(8) unsigned char extra_pool[LV_MEM_POOL_EXPAND_SIZE];
+#endif
+constexpr int screen_height =
+#if defined(BOARD_USES_M5UNIFIED)
+    240;
+#else
+    170;
+#endif
 uint16_t draw_buffers[2][320 * 16];
-uint16_t framebuffer[320 * 170];
+uint16_t framebuffer[320 * screen_height];
 unsigned flushes;
 
 void flush(lv_display_t* display, const lv_area_t* area, uint8_t* pixels) {
@@ -39,7 +48,7 @@ void advance(uint32_t duration) {
 void screenshot(const char* path) {
     FILE* out = std::fopen(path, "wb");
     if (!out) std::abort();
-    std::fprintf(out, "P6\n320 170\n255\n");
+    std::fprintf(out, "P6\n320 %d\n255\n", screen_height);
     for (uint16_t pixel : framebuffer) {
         unsigned char rgb[] = {
             static_cast<unsigned char>(((pixel >> 11) & 31) * 255 / 31),
@@ -136,15 +145,17 @@ bool getLocalTime(tm* info, uint32_t) {
 int main(int argc, char** argv) {
     std::setbuf(stdout, nullptr);
     lv_init();
+#if LV_MEM_POOL_EXPAND_SIZE > 0
     if (!lv_mem_add_pool(extra_pool, sizeof(extra_pool))) return 2;
     // A wider glucose label needs a contiguous ARGB buffer larger than 64 KiB.
     void* large_layer = lv_malloc(128 * 1024);
     if (!large_layer) return 4;
     lv_free(large_layer);
+#endif
     // Emulate memory retained by inactive screens and exercise fragmentation pressure.
     if (argc > 2 && !lv_malloc(std::strtoul(argv[2], nullptr, 10))) return 6;
     lv_tick_set_cb([]() -> uint32_t { return ticks; });
-    auto* display = lv_display_create(320, 170);
+    auto* display = lv_display_create(320, screen_height);
     lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(display, draw_buffers[0], draw_buffers[1], sizeof(draw_buffers[0]), LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(display, flush);
@@ -152,6 +163,16 @@ int main(int argc, char** argv) {
     auto* clock_screen = ui_clock_create();
     ui_navigation::init(nullptr);
     ui_navigation::update(false, false);
+#if defined(BOARD_USES_M5UNIFIED)
+    if (ui_layout::content_height() != 196
+        || lv_obj_get_style_pad_bottom(main_screen, LV_PART_MAIN) != 44
+        || lv_obj_get_style_pad_bottom(clock_screen, LV_PART_MAIN) != 44) return 8;
+    ui_navigation::set_alarm_status(true, true, false, true, 0, 0);
+    if (!find_label(lv_layer_top(), "Звук включён")) return 9;
+    ui_navigation::set_alarm_status(true, true, false, true, 300, 5);
+    if (!find_label(lv_layer_top(), "Отсрочка 5 мин | 5:00")) return 10;
+    ui_navigation::set_alarm_status(true, true, false, true, 0, 0);
+#endif
     lv_obj_t* screens[] = {main_screen, clock_screen};
     if (!check_delta_colors(screens, argc > 1 ? argv[1] : nullptr)) return 7;
     NightscoutData data;

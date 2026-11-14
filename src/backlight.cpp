@@ -4,7 +4,7 @@
 #include <esp_arduino_version.h>
 #include <driver/gpio.h>
 
-#if defined(BOARD_M5CORE_S3)
+#if defined(BOARD_USES_M5UNIFIED)
   #include "gfx/Display.h"
 #endif
 
@@ -52,7 +52,7 @@ void Backlight::begin(const BacklightConfig& cfg) {
     setLevels(app_constants::brightness_levels, sizeof(app_constants::brightness_levels) / sizeof(app_constants::brightness_levels[0]));
   }
 
-#if !defined(BOARD_M5CORE_S3)
+#if !defined(BOARD_USES_M5UNIFIED)
   pinMode(_cfg.pin, OUTPUT);
 #endif
 
@@ -61,7 +61,7 @@ void Backlight::begin(const BacklightConfig& cfg) {
 }
 
 void Backlight::backlightInit() {
-#if !defined(BOARD_M5CORE_S3)
+#if !defined(BOARD_USES_M5UNIFIED)
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   _pwmAttached = ledcAttachChannel(_cfg.pin, _cfg.freq, _cfg.resBits, _cfg.channel);
 #else
@@ -73,7 +73,7 @@ void Backlight::backlightInit() {
 
 // Полное заполнение LEDC даёт постоянный HIGH без переключения GPIO между PWM и GPIO.
 void Backlight::backlightForceMax() {
-#if defined(BOARD_M5CORE_S3)
+#if defined(BOARD_USES_M5UNIFIED)
   gfx::Display::instance().set_backlight(gfx::Display::brightness_level::max);
 #else
   if (_pwmAttached) {
@@ -122,7 +122,7 @@ void Backlight::setSettingsBoost(bool active) {
 }
 
 void Backlight::applyPercent(uint8_t percent) {
-#if defined(BOARD_M5CORE_S3)
+#if defined(BOARD_USES_M5UNIFIED)
   if (percent < 1) percent = 1;
   if (percent > 100) percent = 100;
   const uint8_t level = (uint16_t)percent * 255 / 100;

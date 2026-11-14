@@ -1,4 +1,4 @@
-// Навигация и индикация тревоги: сенсорная кнопка CoreS3 и компактный индикатор T-Display.
+// Навигация и индикация тревоги: нижняя строка M5Stack/CoreS3 и индикатор T-Display.
 #include "app_constants.h"
 #include "ui_navigation.h"
 #include "ui_layout.h"
@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
-#if defined(BOARD_M5CORE_S3)
+#if defined(BOARD_USES_M5UNIFIED)
 namespace ui_navigation {
 namespace {
 constexpr int32_t swipe_threshold = app_constants::swipe_threshold_px;

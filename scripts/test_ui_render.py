@@ -17,6 +17,10 @@ def main():
     parser.add_argument('--env', default='lilygo-t-display-s3')
     parser.add_argument('--cxx', default=os.environ.get('CXX'))
     args = parser.parse_args()
+    boards = {'lilygo-t-display-s3': 'BOARD_TDISPLAY_S3',
+              'm5cores3': 'BOARD_M5CORE_S3', 'm5stack': 'BOARD_M5STACK'}
+    if args.env not in boards:
+        parser.error('Unsupported UI environment: ' + args.env)
     os.chdir(ROOT)
     cxx = args.cxx or shutil.which('g++')
     if not cxx:
@@ -48,13 +52,14 @@ def main():
     config_path = output / 'lv_conf.h'
     if not config_path.exists() or config_path.read_text(encoding='utf-8') != config:
         config_path.write_text(config, encoding='utf-8')
-    flags = ['-O1', '-w', '-DLV_CONF_INCLUDE_SIMPLE', '-DBOARD_TDISPLAY_S3',
+    flags = ['-O1', '-w', '-DLV_CONF_INCLUDE_SIMPLE', '-D' + boards[args.env],
              '-DLV_FONT_MONTSERRAT_12=1', '-DLV_FONT_MONTSERRAT_14=1', '-DLV_FONT_MONTSERRAT_24=1',
              '-I' + str(output), '-Itest/render_support', '-Isrc', '-Iinclude', '-I' + str(lvgl),
              '-include', 'stdlib.h', '-finput-charset=UTF-8', '-fexec-charset=UTF-8']
     library_headers = list(lvgl.rglob('*.h')) + [config_path]
     c_stamp = max(path.stat().st_mtime for path in library_headers)
     cpp_stamp = max(c_stamp, *(path.stat().st_mtime for path in Path('src').glob('*.h')),
+                    Path('include/board_config.h').stat().st_mtime,
                     Path('test/render_support/Arduino.h').stat().st_mtime)
     sources = list((lvgl / 'src').rglob('*.c')) + list(Path('src/fonts').glob('*.c'))
     sources += [Path('src') / name for name in
@@ -81,8 +86,9 @@ def main():
     subprocess.run([cxx, '@' + str(response), '-static', '-o', str(executable)], check=True)
     print('Rendering real screens with production fonts and animations', flush=True)
     subprocess.run([str(executable), str(output)], check=True, timeout=180)
-    print('Repeating with 64 KiB reserved for inactive UI', flush=True)
-    subprocess.run([str(executable), str(output), str(64 * 1024)], check=True, timeout=180)
+    if args.env == 'lilygo-t-display-s3':
+        print('Repeating with 64 KiB reserved for inactive UI', flush=True)
+        subprocess.run([str(executable), str(output), str(64 * 1024)], check=True, timeout=180)
 
 
 if __name__ == '__main__':

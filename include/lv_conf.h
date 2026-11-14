@@ -82,8 +82,15 @@
     #define LV_MEM_ADR 0     /**< 0: unused*/
     /* Instead of an address give a memory allocator that will be called to get a memory pool for LVGL. E.g. my_malloc */
     #if LV_MEM_ADR == 0
+      #if defined(BOARD_M5STACK)
+        /* Classic ESP32 has a smaller static DRAM region. Keep the full 64 KiB
+         * pool in internal heap RAM, allocated by lv_init before M5/Wi-Fi. */
+        #define LV_MEM_POOL_INCLUDE <stdlib.h>
+        #define LV_MEM_POOL_ALLOC malloc
+      #else
         #undef LV_MEM_POOL_INCLUDE
         #undef LV_MEM_POOL_ALLOC
+      #endif
     #endif
 #endif  /*LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN*/
 
