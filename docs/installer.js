@@ -1,7 +1,7 @@
 const boards = Object.freeze({
-  tdisplay: { name: "LilyGO T-Display S3", manifest: "manifests/tdisplay.json", version: "1.0.2", chipFamily: "ESP32-S3" },
-  cores3: { name: "M5Stack CoreS3 / SE", manifest: "manifests/cores3.json", version: "1.0.2", chipFamily: "ESP32-S3" },
-  m5stack: { name: "M5Stack Core Basic / Gray", manifest: "manifests/m5stack.json", version: "1.0.3", chipFamily: "ESP32" },
+  tdisplay: { name: "LilyGO T-Display S3", manifest: "manifests/tdisplay.json", version: "1.0.3", chipFamily: "ESP32-S3" },
+  cores3: { name: "M5Stack CoreS3 / SE", manifest: "manifests/cores3.json", version: "1.0.3", chipFamily: "ESP32-S3" },
+  m5stack: { name: "M5Stack Core Basic", manifest: "manifests/m5stack.json", version: "1.0.3", chipFamily: "ESP32" },
 });
 const installer = document.querySelector("#installer");
 const button = document.querySelector("#install-button");

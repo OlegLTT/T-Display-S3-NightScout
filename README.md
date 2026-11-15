@@ -16,6 +16,9 @@
 
 **[Установить через браузер](https://olegltt.github.io/T-Display-S3-NightScout/)** — Chrome или Edge на компьютере.
 
+Готовые прошивки для всех трёх плат и инструкция по обновлению:
+[релиз v1.0.3](https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.3).
+
 ## Поддерживаемые устройства
 
 | Устройство | Экран | Управление | Звук |
@@ -223,7 +226,7 @@ Nightscout. До первого успешного получения порог
 
 После открытия настроек отпустите POWER: длительное удержание может выключить питание.
 
-### M5Stack Core Basic 
+### M5Stack Core Basic
 
 Кнопки пронумерованы слева направо: **1 = A**, **2 = B**, **3 = C**.
 Удержание срабатывает через 600 мс и не вызывает короткого нажатия после отпускания.
@@ -394,7 +397,7 @@ PlatformIO автоматически при сборке.
 Логика и формат **LAN-синхронизации паузы тревог (Snooze)** заимствованы из
 [M5_NightscoutMon](https://github.com/mlukasek/M5_NightscoutMon),
 автор — **Martin Lukasek** ([mlukasek](https://github.com/mlukasek)), и адаптированы
-для T-Display S3, CoreS3 / CoreS3 SE и Core Basic . Синхронизация передаёт включение и отмену
+для T-Display S3, CoreS3 / CoreS3 SE и Core Basic. Синхронизация передаёт включение и отмену
 паузы между устройствами в одной подсети с одинаковым адресом Nightscout.
 
 Спасибо авторам за открытые библиотеки и исходный код.
@@ -418,7 +421,7 @@ pio run -e m5cores3
 pio run -e m5cores3 -t upload
 ```
 
-Для M5Stack Core Basic :
+Для M5Stack Core Basic:
 
 ```powershell
 pio run -e m5stack
@@ -428,10 +431,13 @@ pio run -e m5stack -t upload
 Окружение `m5stack` рассчитано на классический ESP32 с 4 МБ Flash и не требует PSRAM.
 Пул LVGL размером 64 КБ выделяется из динамической RAM при запуске, чтобы не переполнять
 статическую область DRAM. Разметка `huge_app.csv` выделяет 3 МБ под прошивку.
-Для установки через браузер выберите **M5Stack Core Basic ** по рисунку в
+Для установки через браузер выберите **M5Stack Core Basic** по рисунку в
 [онлайн-установщике](https://olegltt.github.io/T-Display-S3-NightScout/).
 Онлайн-установка полностью удаляет сохранённые настройки. Для обновления с сохранением
-настроек используйте PlatformIO, как показано выше.
+настроек используйте PlatformIO либо приложение `firmware.bin` из архива своей платы
+в [релизе v1.0.3](https://github.com/OlegLTT/T-Display-S3-NightScout/releases/tag/v1.0.3).
+Запись приложения выполняется по адресу `0x10000` при совместимой разметке Flash;
+подробные команды для ESP32 и ESP32-S3 находятся в `INSTALL-RU.md` внутри релиза.
 
 Для CoreS3 / SE задано `board_build.arduino.memory_type = qio_qspi`.
 Если подключено несколько плат, укажите порт, например `--upload-port COM5`.

@@ -64,7 +64,7 @@ def main():
     assert merged[0x9000:0xE000] == b'\xff' * 0x5000
     assert len(merged) == 0x10000 + len(app) <= 4 * 1024 * 1024
     manifest = {
-        'name': 'Nightscout Monitor - M5Stack Core Basic / Gray',
+        'name': 'Nightscout Monitor - M5Stack Core Basic',
         'version': args.version,
         'board': 'm5stack',
         'new_install_prompt_erase': False,
